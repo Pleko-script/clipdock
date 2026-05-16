@@ -1,8 +1,9 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
+import type { ClipdockApi } from '../shared/clipdock'
 
 declare global {
   interface Window {
-    electron: ElectronAPI
-    api: unknown
+    clipdock: ClipdockApi
   }
 }
+
+export {}
