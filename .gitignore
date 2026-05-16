@@ -7,6 +7,7 @@ out
 
 # ── GSD baseline (auto-generated) ──
 .gsd
+.gsd.migrating
 .gsd-id
 .mcp.json
 .bg-shell/
