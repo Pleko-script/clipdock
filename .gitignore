@@ -1,37 +1,38 @@
-node_modules
-dist
-out
-.DS_Store
+node_modules/
+dist/
+out/
+tmp/
+coverage/
+.cache/
 .eslintcache
+*.log
 *.log*
 
-# ── GSD baseline (auto-generated) ──
-.gsd
-.gsd.migrating
+# Agent and local workspace state
+.gsd/
+.gsd.migrating/
 .gsd-id
 .mcp.json
 .bg-shell/
+.vscode/
+.idea/
+*.code-workspace
+
+# OS/editor noise
+.DS_Store
 Thumbs.db
 *.swp
 *.swo
 *~
-.idea/
-.vscode/
-*.code-workspace
+
+# Environments and generated artifacts
 .env
 .env.*
 !.env.example
-node_modules/
 .next/
-dist/
-build/
 __pycache__/
 *.pyc
 .venv/
 venv/
 target/
 vendor/
-*.log
-coverage/
-.cache/
-tmp/
