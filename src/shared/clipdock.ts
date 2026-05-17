@@ -50,6 +50,11 @@ export type ClipdockErrorCode =
   | 'THUMBNAIL_FAILED'
   | 'CLIP_NOT_FOUND'
   | 'CLIP_UPDATE_FAILED'
+  | 'BIN_NOT_FOUND'
+  | 'BIN_DUPLICATE_NAME'
+  | 'BIN_UPDATE_FAILED'
+  | 'CLIP_REMOVE_FAILED'
+  | 'CLIP_EXPORT_FAILED'
 
 export type LibraryImportPhase =
   | 'open'
@@ -71,6 +76,9 @@ export type LibraryImportPhase =
   | 'clipboard'
   | 'reveal'
   | 'update'
+  | 'bin'
+  | 'remove'
+  | 'export'
 
 export interface ClipdockError {
   code: ClipdockErrorCode
@@ -89,6 +97,8 @@ export type LibrarySourceKind = 'folder' | 'managed-file'
 export type LibrarySourceStatus = 'active' | 'missing' | 'error' | 'removed'
 
 export type LibraryClipStatus = 'ready' | 'missing' | 'error' | 'removed'
+
+export type ClipRotationDegrees = 0 | 90 | 180 | 270
 
 export interface LibraryFailure extends ClipdockError {
   phase: LibraryImportPhase
@@ -111,6 +121,27 @@ export interface LibrarySourceRecordSummary {
   lastScanCompletedAtMs: number | null
   lastErrorCode: ClipdockErrorCode | null
   lastErrorMessage: string | null
+}
+
+export interface LibraryBinRecordSummary {
+  id: string
+  name: string
+  sortOrder: number
+  clipCount: number
+  createdAtMs: number
+  updatedAtMs: number
+}
+
+export interface LibraryClipExportRecordSummary {
+  id: string
+  clipId: string
+  variantKind: 'rotation'
+  rotationDegrees: Exclude<ClipRotationDegrees, 0>
+  sourceSizeBytes: number
+  sourceModifiedAtMs: number
+  exportPath: string
+  createdAtMs: number
+  updatedAtMs: number
 }
 
 export interface LibraryClipRecordSummary {
@@ -136,6 +167,8 @@ export interface LibraryClipRecordSummary {
   favorite: boolean
   note: string
   tags: string[]
+  binIds: string[]
+  rotationDegrees: ClipRotationDegrees
   createdAtMs: number
   updatedAtMs: number
   lastErrorCode: ClipdockErrorCode | null
@@ -145,6 +178,7 @@ export interface LibraryClipRecordSummary {
 export interface LibrarySnapshot {
   generatedAtMs: number
   sources: LibrarySourceRecordSummary[]
+  bins: LibraryBinRecordSummary[]
   clips: LibraryClipRecordSummary[]
 }
 
@@ -242,6 +276,24 @@ export interface ClipdockApi {
   toggleFavorite: (clipId: string) => Promise<ClipdockResult<LibrarySnapshot>>
   updateClipTags: (clipId: string, tags: string[]) => Promise<ClipdockResult<LibrarySnapshot>>
   updateClipNote: (clipId: string, note: string) => Promise<ClipdockResult<LibrarySnapshot>>
+  createBin: (name: string) => Promise<ClipdockResult<LibrarySnapshot>>
+  renameBin: (binId: string, name: string) => Promise<ClipdockResult<LibrarySnapshot>>
+  deleteBin: (binId: string) => Promise<ClipdockResult<LibrarySnapshot>>
+  addClipsToBin: (clipIds: string[], binId: string) => Promise<ClipdockResult<LibrarySnapshot>>
+  moveClipsToBin: (
+    clipIds: string[],
+    fromBinId: string,
+    toBinId: string
+  ) => Promise<ClipdockResult<LibrarySnapshot>>
+  removeClipsFromBin: (
+    clipIds: string[],
+    binId: string
+  ) => Promise<ClipdockResult<LibrarySnapshot>>
+  removeClipsFromLibrary: (clipIds: string[]) => Promise<ClipdockResult<LibrarySnapshot>>
+  updateClipRotation: (
+    clipId: string,
+    rotationDegrees: ClipRotationDegrees
+  ) => Promise<ClipdockResult<LibrarySnapshot>>
   revealClip: (clipId: string) => Promise<ClipdockResult<void>>
   copyClipPath: (clipId: string) => Promise<ClipdockResult<void>>
   startClipDrag: (request: ClipDragRequest) => void
