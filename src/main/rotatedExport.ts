@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto'
-import { stat, mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { stat, mkdir, rename, rm } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import ffmpegPath from 'ffmpeg-static'
 import type { ClipRotationDegrees, LibraryResult } from '../shared/clipdock'
 import type { LibraryStore } from './libraryStore'
 
 const ROTATION_TIMEOUT_MS = 10 * 60 * 1000
+const VALIDATION_TIMEOUT_MS = 5 * 60 * 1000
 
 export interface ResolveRotatedExportInput {
   store: LibraryStore
@@ -44,6 +45,10 @@ function exportName(input: ResolveRotatedExportInput): string {
     .slice(0, 24)
 
   return `${hash}-rot${input.rotationDegrees}.mp4`
+}
+
+function temporaryExportPath(outputPath: string): string {
+  return join(dirname(outputPath), `${basename(outputPath)}.${process.pid}.${Date.now()}.tmp.mp4`)
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -118,6 +123,88 @@ async function renderRotation(
   })
 }
 
+async function validatePlayableVideo(filePath: string): Promise<LibraryResult<void>> {
+  const executablePath = ffmpegPath
+
+  if (!executablePath) {
+    return fail('FFmpeg is not available for rotated export validation.')
+  }
+
+  const args = ['-v', 'error', '-xerror', '-i', filePath, '-map', '0:v:0', '-f', 'null', '-']
+
+  return await new Promise((resolve) => {
+    const child = spawn(executablePath, args, { windowsHide: true })
+    const errorChunks: Buffer[] = []
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolve(fail('Rotated export validation timed out.'))
+    }, VALIDATION_TIMEOUT_MS)
+
+    child.stderr.on('data', (chunk: Buffer) => errorChunks.push(chunk))
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve(fail('Rotated export validation could not be started.'))
+    })
+    child.on('close', (code: number | null) => {
+      clearTimeout(timer)
+
+      if (code === 0) {
+        resolve(ok(undefined))
+        return
+      }
+
+      const details = Buffer.concat(errorChunks).toString('utf8').trim()
+
+      resolve(
+        fail(
+          details
+            ? `Rotated export validation failed: ${details}`
+            : 'Rotated export validation failed.'
+        )
+      )
+    })
+  })
+}
+
+async function removeFileIfPresent(filePath: string): Promise<void> {
+  try {
+    await rm(filePath, { force: true })
+  } catch {
+    // A failed cleanup should not hide the primary export error.
+  }
+}
+
+async function renderValidatedRotation(
+  sourcePath: string,
+  outputPath: string,
+  rotationDegrees: Exclude<ClipRotationDegrees, 0>
+): Promise<LibraryResult<void>> {
+  const tempPath = temporaryExportPath(outputPath)
+
+  try {
+    const rendered = await renderRotation(sourcePath, tempPath, rotationDegrees)
+
+    if (!rendered.ok) {
+      await removeFileIfPresent(tempPath)
+      return rendered
+    }
+
+    const validated = await validatePlayableVideo(tempPath)
+
+    if (!validated.ok) {
+      await removeFileIfPresent(tempPath)
+      return validated
+    }
+
+    await removeFileIfPresent(outputPath)
+    await rename(tempPath, outputPath)
+    return ok(undefined)
+  } catch {
+    await removeFileIfPresent(tempPath)
+    return fail('Rotated export could not be finalized.')
+  }
+}
+
 export async function resolveRotatedExportPath(
   input: ResolveRotatedExportInput
 ): Promise<LibraryResult<string>> {
@@ -138,7 +225,17 @@ export async function resolveRotatedExportPath(
   }
 
   if (cached.value && (await fileExists(cached.value.exportPath))) {
-    return ok(cached.value.exportPath)
+    const cachedValidation = await validatePlayableVideo(cached.value.exportPath)
+
+    if (cachedValidation.ok) {
+      return ok(cached.value.exportPath)
+    }
+
+    await removeFileIfPresent(cached.value.exportPath)
+
+    if (input.renderIfMissing === false) {
+      return fail('Cached rotated export is invalid. Wait for ClipDock to prepare it again.')
+    }
   }
 
   if (input.renderIfMissing === false) {
@@ -146,7 +243,7 @@ export async function resolveRotatedExportPath(
   }
 
   const outputPath = join(input.exportCacheDir, exportName(input))
-  const rendered = await renderRotation(input.sourcePath, outputPath, rotationDegrees)
+  const rendered = await renderValidatedRotation(input.sourcePath, outputPath, rotationDegrees)
 
   if (!rendered.ok) {
     return rendered

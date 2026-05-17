@@ -666,8 +666,8 @@ test('rotated drag export resolver can fail fast instead of rendering during dra
     assert.equal(notPrepared.error.code, 'CLIP_EXPORT_FAILED')
     assert.match(notPrepared.error.message, /not ready/i)
 
-    writeFileSync(exportFile, 'store-only rotated export')
-    const saved = store.upsertClipRotationExport({
+    writeFileSync(exportFile, 'store-only corrupt rotated export')
+    const corruptSaved = store.upsertClipRotationExport({
       clipId: copied.value.clip.id,
       rotationDegrees: 90,
       sourceSizeBytes: 24,
@@ -675,7 +675,49 @@ test('rotated drag export resolver can fail fast instead of rendering during dra
       exportPath: exportFile
     })
 
-    assert.equal(saved.ok, true)
+    assert.equal(corruptSaved.ok, true)
+
+    const corrupt = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
+
+    assert.equal(corrupt.ok, false)
+    assert.equal(corrupt.error.code, 'CLIP_EXPORT_FAILED')
+    assert.match(corrupt.error.message, /invalid/i)
+    assert.equal(existsSync(exportFile), false)
+
+    const requireFromProject = createRequire(join(projectRoot, 'package.json'))
+    const ffmpegPath = requireFromProject('ffmpeg-static')
+    const exportResult = spawnSync(
+      ffmpegPath,
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=size=64x36:rate=5',
+        '-t',
+        '0.2',
+        '-pix_fmt',
+        'yuv420p',
+        exportFile
+      ],
+      { cwd: projectRoot, encoding: 'utf8' }
+    )
+
+    assert.equal(
+      exportResult.status,
+      0,
+      `Fixture export generation failed\nSTDOUT:\n${exportResult.stdout}\nSTDERR:\n${exportResult.stderr}`
+    )
+
+    const validSaved = store.upsertClipRotationExport({
+      clipId: copied.value.clip.id,
+      rotationDegrees: 90,
+      sourceSizeBytes: 24,
+      sourceModifiedAtMs: 100,
+      exportPath: exportFile
+    })
+
+    assert.equal(validSaved.ok, true)
 
     const prepared = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
 
