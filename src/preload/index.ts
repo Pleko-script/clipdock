@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
+  ClipRotationDegrees,
   ClipdockApi,
   ClipdockResult,
   ClipDragEvent,
@@ -17,6 +18,14 @@ const RESCAN_LIBRARY_CHANNEL = 'clipdock:library:rescan'
 const TOGGLE_FAVORITE_CHANNEL = 'clipdock:clip:toggle-favorite'
 const UPDATE_CLIP_TAGS_CHANNEL = 'clipdock:clip:update-tags'
 const UPDATE_CLIP_NOTE_CHANNEL = 'clipdock:clip:update-note'
+const CREATE_BIN_CHANNEL = 'clipdock:bin:create'
+const RENAME_BIN_CHANNEL = 'clipdock:bin:rename'
+const DELETE_BIN_CHANNEL = 'clipdock:bin:delete'
+const ADD_CLIPS_TO_BIN_CHANNEL = 'clipdock:bin:add-clips'
+const MOVE_CLIPS_TO_BIN_CHANNEL = 'clipdock:bin:move-clips'
+const REMOVE_CLIPS_FROM_BIN_CHANNEL = 'clipdock:bin:remove-clips'
+const REMOVE_CLIPS_FROM_LIBRARY_CHANNEL = 'clipdock:clip:remove-from-library'
+const UPDATE_CLIP_ROTATION_CHANNEL = 'clipdock:clip:update-rotation'
 const REVEAL_CLIP_CHANNEL = 'clipdock:clip:reveal'
 const COPY_CLIP_PATH_CHANNEL = 'clipdock:clip:copy-path'
 const START_CLIP_DRAG_CHANNEL = 'clipdock:clip:start-drag'
@@ -122,6 +131,78 @@ const clipdock: ClipdockApi = Object.freeze({
       'ClipDock could not update the note.',
       clipId,
       note
+    )
+  },
+  createBin: (name: string): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      CREATE_BIN_CHANNEL,
+      'ClipDock could not create the bin.',
+      name
+    )
+  },
+  renameBin: (binId: string, name: string): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      RENAME_BIN_CHANNEL,
+      'ClipDock could not rename the bin.',
+      binId,
+      name
+    )
+  },
+  deleteBin: (binId: string): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      DELETE_BIN_CHANNEL,
+      'ClipDock could not delete the bin.',
+      binId
+    )
+  },
+  addClipsToBin: (clipIds: string[], binId: string): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      ADD_CLIPS_TO_BIN_CHANNEL,
+      'ClipDock could not add clips to the bin.',
+      Array.isArray(clipIds) ? clipIds.slice(0, 256) : [],
+      binId
+    )
+  },
+  moveClipsToBin: (
+    clipIds: string[],
+    fromBinId: string,
+    toBinId: string
+  ): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      MOVE_CLIPS_TO_BIN_CHANNEL,
+      'ClipDock could not move clips between bins.',
+      Array.isArray(clipIds) ? clipIds.slice(0, 256) : [],
+      fromBinId,
+      toBinId
+    )
+  },
+  removeClipsFromBin: (
+    clipIds: string[],
+    binId: string
+  ): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      REMOVE_CLIPS_FROM_BIN_CHANNEL,
+      'ClipDock could not remove clips from the bin.',
+      Array.isArray(clipIds) ? clipIds.slice(0, 256) : [],
+      binId
+    )
+  },
+  removeClipsFromLibrary: (clipIds: string[]): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      REMOVE_CLIPS_FROM_LIBRARY_CHANNEL,
+      'ClipDock could not remove clips from the library.',
+      Array.isArray(clipIds) ? clipIds.slice(0, 256) : []
+    )
+  },
+  updateClipRotation: (
+    clipId: string,
+    rotationDegrees: ClipRotationDegrees
+  ): Promise<ClipdockResult<LibrarySnapshot>> => {
+    return invokeClipdock<LibrarySnapshot>(
+      UPDATE_CLIP_ROTATION_CHANNEL,
+      'ClipDock could not update clip rotation.',
+      clipId,
+      rotationDegrees
     )
   },
   revealClip: (clipId: string): Promise<ClipdockResult<void>> => {

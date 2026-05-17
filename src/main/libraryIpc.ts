@@ -39,6 +39,14 @@ const RESCAN_LIBRARY_CHANNEL = 'clipdock:library:rescan'
 const TOGGLE_FAVORITE_CHANNEL = 'clipdock:clip:toggle-favorite'
 const UPDATE_CLIP_TAGS_CHANNEL = 'clipdock:clip:update-tags'
 const UPDATE_CLIP_NOTE_CHANNEL = 'clipdock:clip:update-note'
+const CREATE_BIN_CHANNEL = 'clipdock:bin:create'
+const RENAME_BIN_CHANNEL = 'clipdock:bin:rename'
+const DELETE_BIN_CHANNEL = 'clipdock:bin:delete'
+const ADD_CLIPS_TO_BIN_CHANNEL = 'clipdock:bin:add-clips'
+const MOVE_CLIPS_TO_BIN_CHANNEL = 'clipdock:bin:move-clips'
+const REMOVE_CLIPS_FROM_BIN_CHANNEL = 'clipdock:bin:remove-clips'
+const REMOVE_CLIPS_FROM_LIBRARY_CHANNEL = 'clipdock:clip:remove-from-library'
+const UPDATE_CLIP_ROTATION_CHANNEL = 'clipdock:clip:update-rotation'
 const REVEAL_CLIP_CHANNEL = 'clipdock:clip:reveal'
 const COPY_CLIP_PATH_CHANNEL = 'clipdock:clip:copy-path'
 const START_CLIP_DRAG_CHANNEL = 'clipdock:clip:start-drag'
@@ -53,6 +61,14 @@ const LIBRARY_INVOKE_CHANNELS = [
   TOGGLE_FAVORITE_CHANNEL,
   UPDATE_CLIP_TAGS_CHANNEL,
   UPDATE_CLIP_NOTE_CHANNEL,
+  CREATE_BIN_CHANNEL,
+  RENAME_BIN_CHANNEL,
+  DELETE_BIN_CHANNEL,
+  ADD_CLIPS_TO_BIN_CHANNEL,
+  MOVE_CLIPS_TO_BIN_CHANNEL,
+  REMOVE_CLIPS_FROM_BIN_CHANNEL,
+  REMOVE_CLIPS_FROM_LIBRARY_CHANNEL,
+  UPDATE_CLIP_ROTATION_CHANNEL,
   REVEAL_CLIP_CHANNEL,
   COPY_CLIP_PATH_CHANNEL
 ] as const
@@ -756,6 +772,24 @@ function validClipId(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null
 }
 
+function validClipIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [
+        ...new Set(
+          value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        )
+      ].slice(0, 256)
+    : []
+}
+
+function validText(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function validRotation(value: unknown): 0 | 90 | 180 | 270 | null {
+  return value === 0 || value === 90 || value === 180 || value === 270 ? value : null
+}
+
 function validTags(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return []
@@ -999,6 +1033,76 @@ export function registerLibraryIpc(
             store.updateClipNote(id, typeof note === 'string' ? note : '')
           )
         : fail('LIBRARY_INVALID_INPUT', 'A valid clip id is required.', { phase: 'update' })
+    }
+  )
+  resolvedDependencies.ipcMain.handle(CREATE_BIN_CHANNEL, (_event, name: unknown) =>
+    updateSnapshot(ensureRuntime, (store) => store.createBin(validText(name)))
+  )
+  resolvedDependencies.ipcMain.handle(RENAME_BIN_CHANNEL, (_event, binId: unknown, name: unknown) => {
+    const id = validClipId(binId)
+
+    return id
+      ? updateSnapshot(ensureRuntime, (store) => store.renameBin(id, validText(name)))
+      : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
+  })
+  resolvedDependencies.ipcMain.handle(DELETE_BIN_CHANNEL, (_event, binId: unknown) => {
+    const id = validClipId(binId)
+
+    return id
+      ? updateSnapshot(ensureRuntime, (store) => store.deleteBin(id))
+      : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
+  })
+  resolvedDependencies.ipcMain.handle(
+    ADD_CLIPS_TO_BIN_CHANNEL,
+    (_event, clipIds: unknown, binId: unknown) => {
+      const id = validClipId(binId)
+
+      return id
+        ? updateSnapshot(ensureRuntime, (store) => store.addClipsToBin(validClipIds(clipIds), id))
+        : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
+    }
+  )
+  resolvedDependencies.ipcMain.handle(
+    MOVE_CLIPS_TO_BIN_CHANNEL,
+    (_event, clipIds: unknown, fromBinId: unknown, toBinId: unknown) => {
+      const fromId = validClipId(fromBinId)
+      const toId = validClipId(toBinId)
+
+      return fromId && toId
+        ? updateSnapshot(ensureRuntime, (store) =>
+            store.moveClipsToBin(validClipIds(clipIds), fromId, toId)
+          )
+        : fail('LIBRARY_INVALID_INPUT', 'Valid source and target bin ids are required.', {
+            phase: 'bin'
+          })
+    }
+  )
+  resolvedDependencies.ipcMain.handle(
+    REMOVE_CLIPS_FROM_BIN_CHANNEL,
+    (_event, clipIds: unknown, binId: unknown) => {
+      const id = validClipId(binId)
+
+      return id
+        ? updateSnapshot(ensureRuntime, (store) =>
+            store.removeClipsFromBin(validClipIds(clipIds), id)
+          )
+        : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
+    }
+  )
+  resolvedDependencies.ipcMain.handle(REMOVE_CLIPS_FROM_LIBRARY_CHANNEL, (_event, clipIds: unknown) =>
+    updateSnapshot(ensureRuntime, (store) => store.removeClipsFromLibrary(validClipIds(clipIds)))
+  )
+  resolvedDependencies.ipcMain.handle(
+    UPDATE_CLIP_ROTATION_CHANNEL,
+    (_event, clipId: unknown, rotation: unknown) => {
+      const id = validClipId(clipId)
+      const degrees = validRotation(rotation)
+
+      return id && degrees !== null
+        ? updateSnapshot(ensureRuntime, (store) => store.updateClipRotation(id, degrees))
+        : fail('LIBRARY_INVALID_INPUT', 'A valid clip id and rotation are required.', {
+            phase: 'update'
+          })
     }
   )
   resolvedDependencies.ipcMain.handle(REVEAL_CLIP_CHANNEL, async (_event, clipId: unknown) => {
