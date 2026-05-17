@@ -51,13 +51,16 @@ Supported extensions: `.mp4`, `.mov`, `.mxf`, `.mkv`, `.avi`, `.webm`, `.m4v`, `
 
 ## Daily Workflow
 
-- Browse clips in the visual grid.
+- Browse clips in the visual grid or focus the larger preview stage.
 - Search by filename, path, tags, or notes.
 - Filter favorites or tags from the sidebar.
-- Click a clip to show metadata and preview it in the right panel.
+- Create ClipDock bins in the sidebar for project, scene, client, or delivery groups.
+- Drag clips onto bins, or use right-click menus to add, move, remove, rename, or delete.
+- Click a clip to preview it. Metadata is available but kept secondary to playback.
 - Double-click a clip to focus its preview.
+- Rotate clips in 90 degree steps from the preview controls when phone or camera footage has the wrong orientation.
 - Use the tag editor and notes panel to organize clips.
-- Use `Reveal in Explorer` or `Copy Path` from the details panel.
+- Use `Reveal in Explorer`, `Copy Path`, or `Remove from ClipDock` from the right-click menu.
 
 ## Drag To DaVinci Resolve
 
@@ -67,13 +70,16 @@ Primary target: DaVinci Resolve Media Pool. Direct timeline drops depend on Reso
 
 Multi-select is available with Ctrl-click or Cmd-click. ClipDock attempts native multi-file drag when more than one selected clip is dragged; if a target app accepts only one file, drag a single clip.
 
+Rotated clips stay non-destructive. When a rotated clip is dragged out, ClipDock renders or reuses an app-owned rotated MP4 variant and drags that file instead of modifying the source media.
+
 ## Local Data
 
 - SQLite database: Electron `userData/clipdock-library/library.sqlite`
 - Managed copied media: Electron `userData/clipdock-library/managed-media`
 - Thumbnails: Electron `userData/clipdock-library/thumbnails`
+- Rotated drag exports: Electron `userData/clipdock-library/exports`
 
-Linked folders are referenced in place. Copied videos are explicit managed copies. ClipDock does not delete source media in the MVP.
+Linked folders are referenced in place. Copied videos are explicit managed copies. Removing a clip or bin from ClipDock does not delete source media from disk.
 
 ## Security Boundary
 
@@ -90,11 +96,11 @@ Linked folders are referenced in place. Copied videos are explicit managed copie
 - Grid virtualization is not yet added. The UI is structured for large libraries, but very large folders may need the planned virtualization pass.
 - Drag-out compatibility is implemented as generic OS native file drag. Real DaVinci Resolve behavior must be smoke-tested on the target workstation.
 - No in/out subclip rendering, proxy generation, waveform generation, AI tagging, Resolve scripting API, or advanced timeline editing is included in the MVP.
+- Rotated drag exports currently target H.264 MP4 variants for compatibility.
 
 ## Future Roadmap
 
 - Virtualized grid for very large libraries.
-- Collections and bins independent of filesystem folders.
 - In/out marks per clip and temporary subclip rendering.
 - Resolve scripting `Send to DaVinci Resolve` action.
 - Proxy and waveform generation.
