@@ -80,7 +80,20 @@ test('shared contract covers the requested ClipDock MVP features', () => {
     'tags',
     'note',
     'ScanEvent',
-    'ClipDragRequest'
+    'ClipDragRequest',
+    'LibraryBinRecordSummary',
+    'ClipRotationDegrees',
+    'binIds',
+    'rotationDegrees',
+    'bins',
+    'createBin',
+    'renameBin',
+    'deleteBin',
+    'addClipsToBin',
+    'moveClipsToBin',
+    'removeClipsFromBin',
+    'removeClipsFromLibrary',
+    'updateClipRotation'
   ]) {
     assert.match(shared, new RegExp(`\\b${surface}\\b`))
   }
@@ -88,6 +101,10 @@ test('shared contract covers the requested ClipDock MVP features', () => {
 
 test('SQLite store persists folders, clips, tags, marks, metadata, thumbnails, and FTS', () => {
   for (const table of ['library_sources', 'clips', 'tags', 'clip_tags', 'clip_marks']) {
+    assert.match(store, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
+  }
+
+  for (const table of ['bins', 'clip_bins', 'clip_exports']) {
     assert.match(store, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
   }
 
@@ -99,7 +116,10 @@ test('SQLite store persists folders, clips, tags, marks, metadata, thumbnails, a
     'codec',
     'thumbnail_path',
     'favorite',
-    'note'
+    'note',
+    'rotation_degrees',
+    'binIds',
+    'rotationDegrees'
   ]) {
     assert.match(store, new RegExp(`\\b${field}\\b`))
   }
@@ -133,6 +153,18 @@ test('preload exposes only the typed clipdock bridge and no raw node/electron AP
   assert.match(preload, /updateClipTags/)
   assert.match(preload, /updateClipNote/)
   assert.match(preload, /startClipDrag/)
+  for (const method of [
+    'createBin',
+    'renameBin',
+    'deleteBin',
+    'addClipsToBin',
+    'moveClipsToBin',
+    'removeClipsFromBin',
+    'removeClipsFromLibrary',
+    'updateClipRotation'
+  ]) {
+    assert.match(preload, new RegExp(`\\b${method}\\b`))
+  }
 })
 
 test('renderer implements the main visual workflow without direct Node access', () => {
