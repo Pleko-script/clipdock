@@ -89,6 +89,14 @@ export interface UpsertScannedClipResult {
   updated: boolean
 }
 
+export interface ClipDragAsset {
+  id: string
+  filePath: string
+  sizeBytes: number
+  modifiedAtMs: number
+  rotationDegrees: ClipRotationDegrees
+}
+
 export interface LibraryStore {
   snapshot: () => LibraryResult<LibrarySnapshot>
   createLinkedFolderRecord: (
@@ -110,6 +118,22 @@ export interface LibraryStore {
   toggleFavorite: (clipId: string) => LibraryResult<LibrarySnapshot>
   updateClipTags: (clipId: string, tags: string[]) => LibraryResult<LibrarySnapshot>
   updateClipNote: (clipId: string, note: string) => LibraryResult<LibrarySnapshot>
+  createBin: (name: string) => LibraryResult<LibrarySnapshot>
+  renameBin: (binId: string, name: string) => LibraryResult<LibrarySnapshot>
+  deleteBin: (binId: string) => LibraryResult<LibrarySnapshot>
+  addClipsToBin: (clipIds: string[], binId: string) => LibraryResult<LibrarySnapshot>
+  moveClipsToBin: (
+    clipIds: string[],
+    fromBinId: string,
+    toBinId: string
+  ) => LibraryResult<LibrarySnapshot>
+  removeClipsFromBin: (clipIds: string[], binId: string) => LibraryResult<LibrarySnapshot>
+  removeClipsFromLibrary: (clipIds: string[]) => LibraryResult<LibrarySnapshot>
+  updateClipRotation: (
+    clipId: string,
+    rotationDegrees: ClipRotationDegrees
+  ) => LibraryResult<LibrarySnapshot>
+  getClipDragAsset: (clipId: string) => LibraryResult<ClipDragAsset>
   getClipAsset: (clipId: string, kind: 'media' | 'thumbnail') => LibraryResult<string>
   close: () => LibraryResult<void>
 }
@@ -393,6 +417,22 @@ function normalizeTagKey(tag: string): string {
 
 function boundedNote(note: string): string {
   return note.slice(0, 4000)
+}
+
+function normalizeBinKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
+}
+
+function boundedBinName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').slice(0, 80)
+}
+
+function validClipIds(value: string[]): string[] {
+  return [...new Set(value.map((id) => id.trim()).filter(Boolean))].slice(0, 256)
+}
+
+function isClipRotationDegrees(value: unknown): value is ClipRotationDegrees {
+  return value === 0 || value === 90 || value === 180 || value === 270
 }
 
 function ensureColumn(
@@ -1372,6 +1412,304 @@ class SqliteLibraryStore implements LibraryStore {
     }
   }
 
+  createBin(name: string): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('bin')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const cleanName = boundedBinName(name)
+    const normalizedName = normalizeBinKey(cleanName)
+
+    if (!normalizedName) {
+      return fail('LIBRARY_INVALID_INPUT', 'bin', 'A bin name is required.')
+    }
+
+    try {
+      const timestamp = nowMs(this.now)
+      const maxSort = this.database
+        .prepare('SELECT COALESCE(MAX(sort_order), 0) AS value FROM bins')
+        .get() as { value: number }
+
+      this.database
+        .prepare(
+          `INSERT INTO bins (id, name, normalized_name, sort_order, created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(this.createId(), cleanName, normalizedName, maxSort.value + 1, timestamp, timestamp)
+
+      return this.snapshot()
+    } catch {
+      return fail('BIN_DUPLICATE_NAME', 'bin', 'A bin with that name already exists.')
+    }
+  }
+
+  renameBin(binId: string, name: string): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('bin')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const cleanName = boundedBinName(name)
+    const normalizedName = normalizeBinKey(cleanName)
+
+    if (!binId.trim() || !normalizedName) {
+      return fail('LIBRARY_INVALID_INPUT', 'bin', 'A valid bin id and name are required.')
+    }
+
+    try {
+      const result = this.database
+        .prepare('UPDATE bins SET name = ?, normalized_name = ?, updated_at_ms = ? WHERE id = ?')
+        .run(cleanName, normalizedName, nowMs(this.now), binId)
+
+      if (result.changes === 0) {
+        return fail('BIN_NOT_FOUND', 'bin', 'The selected bin was not found.')
+      }
+
+      return this.snapshot()
+    } catch {
+      return fail('BIN_DUPLICATE_NAME', 'bin', 'A bin with that name already exists.')
+    }
+  }
+
+  deleteBin(binId: string): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('bin')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    try {
+      const result = this.database.prepare('DELETE FROM bins WHERE id = ?').run(binId)
+
+      if (result.changes === 0) {
+        return fail('BIN_NOT_FOUND', 'bin', 'The selected bin was not found.')
+      }
+
+      return this.snapshot()
+    } catch {
+      return fail('BIN_UPDATE_FAILED', 'bin', 'ClipDock could not delete the bin.')
+    }
+  }
+
+  addClipsToBin(clipIds: string[], binId: string): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('bin')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const ids = validClipIds(clipIds)
+
+    if (ids.length === 0 || !binId.trim()) {
+      return fail('LIBRARY_INVALID_INPUT', 'bin', 'Select clips and a bin first.')
+    }
+
+    if (!this.readBinById(binId)) {
+      return fail('BIN_NOT_FOUND', 'bin', 'The selected bin was not found.')
+    }
+
+    for (const clipId of ids) {
+      const clip = this.readClipById(clipId)
+
+      if (!clip || clip.status === 'removed') {
+        return fail('CLIP_NOT_FOUND', 'bin', 'One selected clip is no longer in the library.')
+      }
+    }
+
+    try {
+      const timestamp = nowMs(this.now)
+      const insert = this.database.prepare(
+        'INSERT OR IGNORE INTO clip_bins (clip_id, bin_id, created_at_ms) VALUES (?, ?, ?)'
+      )
+
+      this.database.exec('BEGIN IMMEDIATE')
+
+      for (const clipId of ids) {
+        insert.run(clipId, binId, timestamp)
+      }
+
+      this.database.exec('COMMIT')
+
+      return this.snapshot()
+    } catch {
+      safeRollback(this.database)
+      return fail('BIN_UPDATE_FAILED', 'bin', 'ClipDock could not assign clips to the bin.')
+    }
+  }
+
+  moveClipsToBin(
+    clipIds: string[],
+    fromBinId: string,
+    toBinId: string
+  ): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('bin')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const ids = validClipIds(clipIds)
+
+    if (ids.length === 0 || !fromBinId.trim() || !toBinId.trim()) {
+      return fail('LIBRARY_INVALID_INPUT', 'bin', 'Select clips and bins first.')
+    }
+
+    if (!this.readBinById(fromBinId) || !this.readBinById(toBinId)) {
+      return fail('BIN_NOT_FOUND', 'bin', 'The selected bin was not found.')
+    }
+
+    try {
+      const timestamp = nowMs(this.now)
+      const remove = this.database.prepare('DELETE FROM clip_bins WHERE clip_id = ? AND bin_id = ?')
+      const insert = this.database.prepare(
+        'INSERT OR IGNORE INTO clip_bins (clip_id, bin_id, created_at_ms) VALUES (?, ?, ?)'
+      )
+
+      this.database.exec('BEGIN IMMEDIATE')
+
+      for (const clipId of ids) {
+        remove.run(clipId, fromBinId)
+        insert.run(clipId, toBinId, timestamp)
+      }
+
+      this.database.exec('COMMIT')
+
+      return this.snapshot()
+    } catch {
+      safeRollback(this.database)
+      return fail('BIN_UPDATE_FAILED', 'bin', 'ClipDock could not move clips between bins.')
+    }
+  }
+
+  removeClipsFromBin(clipIds: string[], binId: string): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('bin')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const ids = validClipIds(clipIds)
+
+    if (ids.length === 0 || !binId.trim()) {
+      return fail('LIBRARY_INVALID_INPUT', 'bin', 'Select clips and a bin first.')
+    }
+
+    try {
+      const remove = this.database.prepare('DELETE FROM clip_bins WHERE clip_id = ? AND bin_id = ?')
+
+      for (const clipId of ids) {
+        remove.run(clipId, binId)
+      }
+
+      return this.snapshot()
+    } catch {
+      return fail('BIN_UPDATE_FAILED', 'bin', 'ClipDock could not remove clips from the bin.')
+    }
+  }
+
+  removeClipsFromLibrary(clipIds: string[]): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('remove')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const ids = validClipIds(clipIds)
+
+    if (ids.length === 0) {
+      return fail('LIBRARY_INVALID_INPUT', 'remove', 'Select at least one clip to remove.')
+    }
+
+    try {
+      const timestamp = nowMs(this.now)
+
+      this.database.exec('BEGIN IMMEDIATE')
+
+      for (const clipId of ids) {
+        this.database.prepare('DELETE FROM clip_bins WHERE clip_id = ?').run(clipId)
+        this.deleteSearchRow(clipId)
+        this.database
+          .prepare('UPDATE clips SET status = ?, updated_at_ms = ? WHERE id = ?')
+          .run('removed', timestamp, clipId)
+      }
+
+      this.database.exec('COMMIT')
+
+      return this.snapshot()
+    } catch (error) {
+      safeRollback(this.database)
+      const detail = error instanceof Error ? ` ${error.message}` : ''
+
+      return fail(
+        'CLIP_REMOVE_FAILED',
+        'remove',
+        `ClipDock could not remove the selected clips.${detail}`
+      )
+    }
+  }
+
+  updateClipRotation(
+    clipId: string,
+    rotationDegrees: ClipRotationDegrees
+  ): LibraryResult<LibrarySnapshot> {
+    const openResult = this.requireOpen('update')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    if (!clipId.trim() || !isClipRotationDegrees(rotationDegrees)) {
+      return fail('LIBRARY_INVALID_INPUT', 'update', 'A valid clip id and rotation are required.')
+    }
+
+    const clip = this.readClipById(clipId)
+
+    if (!clip || clip.status === 'removed') {
+      return fail('CLIP_NOT_FOUND', 'update', 'The selected clip is no longer in the library.')
+    }
+
+    try {
+      this.database
+        .prepare('UPDATE clips SET rotation_degrees = ?, updated_at_ms = ? WHERE id = ?')
+        .run(rotationDegrees, nowMs(this.now), clipId)
+
+      return this.snapshot()
+    } catch {
+      return fail('CLIP_UPDATE_FAILED', 'update', 'ClipDock could not update clip rotation.')
+    }
+  }
+
+  getClipDragAsset(clipId: string): LibraryResult<ClipDragAsset> {
+    const openResult = this.requireOpen('drag')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const row = this.readClipById(clipId)
+
+    if (!row || row.status === 'removed') {
+      return fail('CLIP_NOT_FOUND', 'drag', 'The selected clip is no longer in the library.')
+    }
+
+    const filePath = actualClipPath(row)
+
+    if (!filePath) {
+      return fail('ASSET_NOT_FOUND', 'drag', 'The selected clip asset is not available.')
+    }
+
+    return ok({
+      id: row.id,
+      filePath,
+      sizeBytes: row.size_bytes,
+      modifiedAtMs: row.modified_at_ms,
+      rotationDegrees: row.rotation_degrees
+    })
+  }
+
   getClipAsset(clipId: string, kind: 'media' | 'thumbnail'): LibraryResult<string> {
     const openResult = this.requireOpen('asset')
 
@@ -1482,6 +1820,14 @@ class SqliteLibraryStore implements LibraryStore {
     return (
       (this.database.prepare('SELECT * FROM clips WHERE id = ?').get(clipId) as
         | ClipRow
+        | undefined) ?? null
+    )
+  }
+
+  private readBinById(binId: string): BinRow | null {
+    return (
+      (this.database.prepare('SELECT *, 0 AS clip_count FROM bins WHERE id = ?').get(binId) as
+        | BinRow
         | undefined) ?? null
     )
   }
@@ -1603,6 +1949,14 @@ class SqliteLibraryStore implements LibraryStore {
         )
     } catch {
       // FTS is best-effort; renderer-side search remains authoritative for the MVP.
+    }
+  }
+
+  private deleteSearchRow(clipId: string): void {
+    try {
+      this.database.prepare('DELETE FROM clip_search WHERE clip_id = ?').run(clipId)
+    } catch {
+      // FTS is optional; absence of the virtual table must not block library mutations.
     }
   }
 }

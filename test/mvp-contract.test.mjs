@@ -385,3 +385,129 @@ test('runtime scanner imports a real local video with metadata, thumbnail, tags,
     rmSync(runtime.scratchRoot, { recursive: true, force: true })
   }
 })
+
+test('library store creates bins and assigns one clip to multiple bins', async () => {
+  const runtime = compileRuntimeModules()
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-bins-runtime-'))
+  const mediaDir = join(workspace, 'media')
+  const managedDir = join(workspace, 'managed')
+  const databaseFile = join(workspace, 'db', 'library.sqlite')
+  const sourceFile = join(mediaDir, 'sample.mp4')
+  const managedFile = join(managedDir, 'sample.mp4')
+  let store
+
+  try {
+    mkdirSync(mediaDir, { recursive: true })
+    mkdirSync(managedDir, { recursive: true })
+    writeFileSync(sourceFile, 'store-only source video')
+    writeFileSync(managedFile, 'store-only managed video')
+
+    store = runtime.storeModule.openLibraryStore({
+      databaseFile,
+      libraryDir: managedDir,
+      now: () => 1_800_000_000_000,
+      createId: createIdGenerator()
+    }).value
+
+    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
+
+    assert.equal(copied.ok, true)
+
+    const clipId = copied.value.clip.id
+    const first = store.createBin('B-Roll')
+    const second = store.createBin('Social')
+
+    assert.equal(first.ok, true)
+    assert.equal(second.ok, true)
+
+    const firstBinId = first.value.bins.find((bin) => bin.name === 'B-Roll').id
+    const secondBinId = second.value.bins.find((bin) => bin.name === 'Social').id
+    const assignedFirst = store.addClipsToBin([clipId], firstBinId)
+    const assignedSecond = store.addClipsToBin([clipId], secondBinId)
+
+    assert.equal(assignedFirst.ok, true)
+    assert.equal(assignedSecond.ok, true)
+
+    const snapshot = store.snapshot()
+
+    assert.equal(snapshot.ok, true)
+    const expectedBinIds = snapshot.value.bins.map((bin) => bin.id).sort()
+
+    assert.deepEqual([...snapshot.value.clips[0].binIds].sort(), expectedBinIds)
+    assert.equal(snapshot.value.bins[0].clipCount, 1)
+    assert.equal(snapshot.value.bins[1].clipCount, 1)
+    assert.equal(store.close().ok, true)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+
+    try {
+      rmSync(workspace, { recursive: true, force: true })
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+  }
+})
+
+test('library store removes clips from ClipDock and stores valid rotations only', async () => {
+  const runtime = compileRuntimeModules()
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-rotation-runtime-'))
+  const mediaDir = join(workspace, 'media')
+  const managedDir = join(workspace, 'managed')
+  const databaseFile = join(workspace, 'db', 'library.sqlite')
+  const sourceFile = join(mediaDir, 'sample.mp4')
+  const managedFile = join(managedDir, 'sample.mp4')
+  let store
+
+  try {
+    mkdirSync(mediaDir, { recursive: true })
+    mkdirSync(managedDir, { recursive: true })
+    writeFileSync(sourceFile, 'store-only source video')
+    writeFileSync(managedFile, 'store-only managed video')
+
+    store = runtime.storeModule.openLibraryStore({
+      databaseFile,
+      libraryDir: managedDir,
+      now: () => 1_800_000_000_000,
+      createId: createIdGenerator()
+    }).value
+
+    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
+
+    assert.equal(copied.ok, true)
+
+    const clipId = copied.value.clip.id
+    const rotated = store.updateClipRotation(clipId, 90)
+
+    assert.equal(rotated.ok, true)
+    assert.equal(rotated.value.clips[0].rotationDegrees, 90)
+
+    const invalid = store.updateClipRotation(clipId, 45)
+
+    assert.equal(invalid.ok, false)
+    assert.equal(invalid.error.code, 'LIBRARY_INVALID_INPUT')
+
+    const removed = store.removeClipsFromLibrary([clipId])
+
+    assert.equal(removed.ok, true)
+    assert.equal(removed.value.clips.length, 0)
+    assert.equal(existsSync(sourceFile), true)
+    assert.equal(existsSync(managedFile), true)
+    assert.equal(store.close().ok, true)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+
+    try {
+      rmSync(workspace, { recursive: true, force: true })
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+  }
+})
