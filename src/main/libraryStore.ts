@@ -9,6 +9,7 @@ import {
   type ClipdockErrorCode,
   type CopiedClipImportResult,
   type LibraryBinRecordSummary,
+  type LibraryClipExportRecordSummary,
   type LibraryClipRecordSummary,
   type LibraryClipStatus,
   type LibraryFailure,
@@ -97,6 +98,17 @@ export interface ClipDragAsset {
   rotationDegrees: ClipRotationDegrees
 }
 
+export interface ClipExportInput {
+  clipId: string
+  rotationDegrees: Exclude<ClipRotationDegrees, 0>
+  sourceSizeBytes: number
+  sourceModifiedAtMs: number
+}
+
+export interface UpsertClipExportInput extends ClipExportInput {
+  exportPath: string
+}
+
 export interface LibraryStore {
   snapshot: () => LibraryResult<LibrarySnapshot>
   createLinkedFolderRecord: (
@@ -133,6 +145,12 @@ export interface LibraryStore {
     clipId: string,
     rotationDegrees: ClipRotationDegrees
   ) => LibraryResult<LibrarySnapshot>
+  getClipRotationExport: (
+    input: ClipExportInput
+  ) => LibraryResult<LibraryClipExportRecordSummary | null>
+  upsertClipRotationExport: (
+    input: UpsertClipExportInput
+  ) => LibraryResult<LibraryClipExportRecordSummary>
   getClipDragAsset: (clipId: string) => LibraryResult<ClipDragAsset>
   getClipAsset: (clipId: string, kind: 'media' | 'thumbnail') => LibraryResult<string>
   close: () => LibraryResult<void>
@@ -208,6 +226,19 @@ interface BinRow {
 interface ClipBinRow {
   clip_id: string
   bin_id: string
+}
+
+interface ClipExportRow {
+  id: string
+  clip_id: string
+  variant_kind: 'rotation'
+  rotation_degrees: Exclude<ClipRotationDegrees, 0>
+  source_size_bytes: number
+  source_modified_at_ms: number
+  export_path: string
+  normalized_export_path: string
+  created_at_ms: number
+  updated_at_ms: number
 }
 
 interface NormalizedLocation {
@@ -355,6 +386,20 @@ function binSummaryFromRow(row: BinRow): LibraryBinRecordSummary {
     name: row.name,
     sortOrder: row.sort_order,
     clipCount: row.clip_count,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms
+  }
+}
+
+function clipExportSummaryFromRow(row: ClipExportRow): LibraryClipExportRecordSummary {
+  return {
+    id: row.id,
+    clipId: row.clip_id,
+    variantKind: row.variant_kind,
+    rotationDegrees: row.rotation_degrees,
+    sourceSizeBytes: row.source_size_bytes,
+    sourceModifiedAtMs: row.source_modified_at_ms,
+    exportPath: row.export_path,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms
   }
@@ -1679,6 +1724,94 @@ class SqliteLibraryStore implements LibraryStore {
       return this.snapshot()
     } catch {
       return fail('CLIP_UPDATE_FAILED', 'update', 'ClipDock could not update clip rotation.')
+    }
+  }
+
+  getClipRotationExport(
+    input: ClipExportInput
+  ): LibraryResult<LibraryClipExportRecordSummary | null> {
+    const openResult = this.requireOpen('export')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    const row = this.database
+      .prepare(
+        `SELECT *
+           FROM clip_exports
+          WHERE clip_id = ?
+            AND variant_kind = 'rotation'
+            AND rotation_degrees = ?
+            AND source_size_bytes = ?
+            AND source_modified_at_ms = ?`
+      )
+      .get(
+        input.clipId,
+        input.rotationDegrees,
+        input.sourceSizeBytes,
+        input.sourceModifiedAtMs
+      ) as unknown as ClipExportRow | undefined
+
+    return ok(row ? clipExportSummaryFromRow(row) : null)
+  }
+
+  upsertClipRotationExport(
+    input: UpsertClipExportInput
+  ): LibraryResult<LibraryClipExportRecordSummary> {
+    const openResult = this.requireOpen('export')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    try {
+      const timestamp = nowMs(this.now)
+      const existing = this.getClipRotationExport(input)
+
+      if (!existing.ok) {
+        return existing
+      }
+
+      const exportId = existing.value?.id ?? this.createId()
+
+      this.database
+        .prepare(
+          `INSERT INTO clip_exports (
+             id, clip_id, variant_kind, rotation_degrees, source_size_bytes,
+             source_modified_at_ms, export_path, normalized_export_path,
+             created_at_ms, updated_at_ms
+           )
+           VALUES (?, ?, 'rotation', ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (
+             clip_id, variant_kind, rotation_degrees, source_size_bytes, source_modified_at_ms
+           )
+           DO UPDATE SET
+             export_path = excluded.export_path,
+             normalized_export_path = excluded.normalized_export_path,
+             updated_at_ms = excluded.updated_at_ms`
+        )
+        .run(
+          exportId,
+          input.clipId,
+          input.rotationDegrees,
+          input.sourceSizeBytes,
+          input.sourceModifiedAtMs,
+          input.exportPath,
+          normalizeForUnique(input.exportPath),
+          existing.value?.createdAtMs ?? timestamp,
+          timestamp
+        )
+
+      const saved = this.getClipRotationExport(input)
+
+      if (!saved.ok || !saved.value) {
+        return fail('CLIP_EXPORT_FAILED', 'export', 'ClipDock could not reload the export record.')
+      }
+
+      return ok(saved.value)
+    } catch {
+      return fail('CLIP_EXPORT_FAILED', 'export', 'ClipDock could not save the export record.')
     }
   }
 

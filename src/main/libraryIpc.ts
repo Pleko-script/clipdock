@@ -30,6 +30,7 @@ import {
 } from '../shared/clipdock'
 import { scanLibrary } from './libraryScanner'
 import { openLibraryStore, type LibraryStore } from './libraryStore'
+import { resolveRotatedExportPath } from './rotatedExport'
 import icon from '../../resources/icon.png?asset'
 
 const GET_LIBRARY_SNAPSHOT_CHANNEL = 'clipdock:library:get-snapshot'
@@ -77,6 +78,7 @@ const LIBRARY_ROOT_DIRNAME = 'clipdock-library'
 const LIBRARY_DATABASE_FILENAME = 'library.sqlite'
 const MANAGED_LIBRARY_DIRNAME = 'managed-media'
 const THUMBNAIL_CACHE_DIRNAME = 'thumbnails'
+const EXPORT_CACHE_DIRNAME = 'exports'
 const MAX_LIBRARY_IMPORT_FAILURES = 25
 const MANAGED_NAME_ATTEMPT_LIMIT = 100
 const VIDEO_FILTER_EXTENSIONS = SUPPORTED_VIDEO_EXTENSIONS.map((extension) => extension.slice(1))
@@ -85,6 +87,7 @@ interface LibraryStorageLocations {
   databaseFile: string
   managedLibraryDir: string
   thumbnailCacheDir: string
+  exportCacheDir: string
 }
 
 interface LibraryRuntime {
@@ -240,7 +243,8 @@ function resolveLibraryStorage(
     return libraryOk({
       databaseFile: join(libraryRoot, LIBRARY_DATABASE_FILENAME),
       managedLibraryDir: join(libraryRoot, MANAGED_LIBRARY_DIRNAME),
-      thumbnailCacheDir: join(libraryRoot, THUMBNAIL_CACHE_DIRNAME)
+      thumbnailCacheDir: join(libraryRoot, THUMBNAIL_CACHE_DIRNAME),
+      exportCacheDir: join(libraryRoot, EXPORT_CACHE_DIRNAME)
     })
   } catch {
     return libraryFail(
@@ -358,6 +362,7 @@ async function ensureManagedLibraryDirectory(
   try {
     await dependencies.fs.mkdir(storage.managedLibraryDir, { recursive: true })
     await dependencies.fs.mkdir(storage.thumbnailCacheDir, { recursive: true })
+    await dependencies.fs.mkdir(storage.exportCacheDir, { recursive: true })
     return libraryOk(undefined)
   } catch {
     return libraryFail(
@@ -836,6 +841,54 @@ async function validateClipFile(
   return ok(asset.value)
 }
 
+async function resolveDragFile(
+  runtime: LibraryRuntime,
+  clipId: string
+): Promise<ClipdockResult<string>> {
+  const asset = runtime.store.getClipDragAsset(clipId)
+
+  if (!asset.ok) {
+    return fromLibraryResult(asset)
+  }
+
+  const extension = getSupportedExtension(asset.value.filePath)
+
+  if (!extension) {
+    return fail('UNSUPPORTED_EXTENSION', 'ClipDock can drag supported video files only.', {
+      phase: 'drag',
+      sourcePath: asset.value.filePath
+    })
+  }
+
+  try {
+    const stats = await stat(asset.value.filePath)
+
+    if (!stats.isFile()) {
+      return fail('NOT_A_FILE', 'The selected clip path is not a file.', {
+        phase: 'drag',
+        sourcePath: asset.value.filePath
+      })
+    }
+  } catch {
+    return fail('MISSING_FILE', 'The selected clip file is no longer available.', {
+      phase: 'drag',
+      sourcePath: asset.value.filePath
+    })
+  }
+
+  return fromLibraryResult(
+    await resolveRotatedExportPath({
+      store: runtime.store,
+      clipId: asset.value.id,
+      sourcePath: asset.value.filePath,
+      sourceSizeBytes: asset.value.sizeBytes,
+      sourceModifiedAtMs: asset.value.modifiedAtMs,
+      rotationDegrees: asset.value.rotationDegrees,
+      exportCacheDir: runtime.storage.exportCacheDir
+    })
+  )
+}
+
 function createDragIcon(): Electron.NativeImage {
   const image = nativeImage.createFromPath(icon)
 
@@ -873,7 +926,7 @@ async function startClipDrag(
   const files: string[] = []
 
   for (const clipId of clipIds) {
-    const validation = await validateClipFile(runtimeResult.value.store, clipId)
+    const validation = await resolveDragFile(runtimeResult.value, clipId)
 
     if (!validation.ok) {
       event.sender.send(CLIP_DRAG_EVENT_CHANNEL, {

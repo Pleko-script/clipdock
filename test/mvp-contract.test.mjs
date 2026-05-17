@@ -140,6 +140,8 @@ test('main process owns dialogs, scanning, thumbnailing, reveal, clipboard, and 
   assert.match(ipc, /clipboard\.writeText/)
   assert.match(ipc, /sender\.startDrag/)
   assert.match(ipc, /validateClipFile/)
+  assert.match(ipc, /resolveRotatedExportPath/)
+  assert.match(ipc, /exportCacheDir/)
   assert.match(ipc, /START_CLIP_DRAG_CHANNEL/)
 })
 
@@ -496,6 +498,84 @@ test('library store removes clips from ClipDock and stores valid rotations only'
     assert.equal(removed.value.clips.length, 0)
     assert.equal(existsSync(sourceFile), true)
     assert.equal(existsSync(managedFile), true)
+    assert.equal(store.close().ok, true)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+
+    try {
+      rmSync(workspace, { recursive: true, force: true })
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+  }
+})
+
+test('library store reuses and invalidates rotation export cache records by source freshness', async () => {
+  const runtime = compileRuntimeModules()
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-export-cache-runtime-'))
+  const mediaDir = join(workspace, 'media')
+  const managedDir = join(workspace, 'managed')
+  const exportDir = join(workspace, 'exports')
+  const databaseFile = join(workspace, 'db', 'library.sqlite')
+  const sourceFile = join(mediaDir, 'sample.mp4')
+  const managedFile = join(managedDir, 'sample.mp4')
+  const exportFile = join(exportDir, 'rot90.mp4')
+  let store
+
+  try {
+    mkdirSync(mediaDir, { recursive: true })
+    mkdirSync(managedDir, { recursive: true })
+    mkdirSync(exportDir, { recursive: true })
+    writeFileSync(sourceFile, 'store-only source video')
+    writeFileSync(managedFile, 'store-only managed video')
+    writeFileSync(exportFile, 'store-only rotated export')
+
+    store = runtime.storeModule.openLibraryStore({
+      databaseFile,
+      libraryDir: managedDir,
+      now: () => 1_800_000_000_000,
+      createId: createIdGenerator()
+    }).value
+
+    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
+
+    assert.equal(copied.ok, true)
+
+    const clipId = copied.value.clip.id
+    const saved = store.upsertClipRotationExport({
+      clipId,
+      rotationDegrees: 90,
+      sourceSizeBytes: 24,
+      sourceModifiedAtMs: 100,
+      exportPath: exportFile
+    })
+
+    assert.equal(saved.ok, true)
+    assert.equal(saved.value.exportPath, exportFile)
+
+    const reused = store.getClipRotationExport({
+      clipId,
+      rotationDegrees: 90,
+      sourceSizeBytes: 24,
+      sourceModifiedAtMs: 100
+    })
+
+    assert.equal(reused.ok, true)
+    assert.equal(reused.value.exportPath, exportFile)
+
+    const stale = store.getClipRotationExport({
+      clipId,
+      rotationDegrees: 90,
+      sourceSizeBytes: 25,
+      sourceModifiedAtMs: 100
+    })
+
+    assert.equal(stale.ok, true)
+    assert.equal(stale.value, null)
     assert.equal(store.close().ok, true)
   } finally {
     try {
