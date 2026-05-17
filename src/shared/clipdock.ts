@@ -293,6 +293,7 @@ export interface ClipdockApi {
   ) => Promise<ClipdockResult<LibrarySnapshot>>
   revealClip: (clipId: string) => Promise<ClipdockResult<void>>
   copyClipPath: (clipId: string) => Promise<ClipdockResult<void>>
+  prepareClipDrag: (request: ClipDragRequest) => Promise<ClipdockResult<void>>
   startClipDrag: (request: ClipDragRequest) => void
   onScanEvent: (listener: (event: ScanEvent) => void) => () => void
   onClipDragEvent: (listener: (event: ClipDragEvent) => void) => () => void

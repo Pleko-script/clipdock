@@ -28,6 +28,7 @@ const REMOVE_CLIPS_FROM_LIBRARY_CHANNEL = 'clipdock:clip:remove-from-library'
 const UPDATE_CLIP_ROTATION_CHANNEL = 'clipdock:clip:update-rotation'
 const REVEAL_CLIP_CHANNEL = 'clipdock:clip:reveal'
 const COPY_CLIP_PATH_CHANNEL = 'clipdock:clip:copy-path'
+const PREPARE_CLIP_DRAG_CHANNEL = 'clipdock:clip:prepare-drag'
 const START_CLIP_DRAG_CHANNEL = 'clipdock:clip:start-drag'
 const SCAN_EVENT_CHANNEL = 'clipdock:library:scan-event'
 const CLIP_DRAG_EVENT_CHANNEL = 'clipdock:clip:drag-event'
@@ -213,6 +214,15 @@ const clipdock: ClipdockApi = Object.freeze({
       COPY_CLIP_PATH_CHANNEL,
       'ClipDock could not copy the clip path.',
       clipId
+    )
+  },
+  prepareClipDrag: (request: ClipDragRequest): Promise<ClipdockResult<void>> => {
+    return invokeClipdock<void>(
+      PREPARE_CLIP_DRAG_CHANNEL,
+      'ClipDock could not prepare clips for dragging.',
+      {
+        clipIds: Array.isArray(request?.clipIds) ? request.clipIds.slice(0, 32) : []
+      }
     )
   },
   startClipDrag: (request: ClipDragRequest): void => {

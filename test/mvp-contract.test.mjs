@@ -97,7 +97,8 @@ test('shared contract covers the requested ClipDock MVP features', () => {
     'moveClipsToBin',
     'removeClipsFromBin',
     'removeClipsFromLibrary',
-    'updateClipRotation'
+    'updateClipRotation',
+    'prepareClipDrag'
   ]) {
     assert.match(shared, new RegExp(`\\b${surface}\\b`))
   }
@@ -146,7 +147,9 @@ test('main process owns dialogs, scanning, thumbnailing, reveal, clipboard, and 
   assert.match(ipc, /validateClipFile/)
   assert.match(ipc, /resolveRotatedExportPath/)
   assert.match(ipc, /exportCacheDir/)
+  assert.match(ipc, /PREPARE_CLIP_DRAG_CHANNEL/)
   assert.match(ipc, /START_CLIP_DRAG_CHANNEL/)
+  assert.match(ipc, /renderIfMissing:\s*false/)
 })
 
 test('preload exposes only the typed clipdock bridge and no raw node/electron API', () => {
@@ -167,7 +170,8 @@ test('preload exposes only the typed clipdock bridge and no raw node/electron AP
     'moveClipsToBin',
     'removeClipsFromBin',
     'removeClipsFromLibrary',
-    'updateClipRotation'
+    'updateClipRotation',
+    'prepareClipDrag'
   ]) {
     assert.match(preload, new RegExp(`\\b${method}\\b`))
   }
@@ -197,6 +201,7 @@ test('renderer implements the main visual workflow without direct Node access', 
     'Drag preview to timeline',
     'onDrop',
     'startClipDrag',
+    'prepareClipDrag',
     'previewUrl',
     'rotationDegrees',
     'Bins',
@@ -262,6 +267,7 @@ function compileRuntimeModules() {
         },
         include: [
           join(projectRoot, 'src', 'main', 'libraryStore.ts'),
+          join(projectRoot, 'src', 'main', 'rotatedExport.ts'),
           join(projectRoot, 'src', 'main', 'libraryScanner.ts'),
           join(projectRoot, 'src', 'main', 'mediaProbe.ts'),
           join(projectRoot, 'src', 'main', 'thumbnailer.ts'),
@@ -289,6 +295,7 @@ function compileRuntimeModules() {
   return {
     scratchRoot,
     storeModule: requireFromCompiled(join(outDir, 'src', 'main', 'libraryStore.js')),
+    rotatedExportModule: requireFromCompiled(join(outDir, 'src', 'main', 'rotatedExport.js')),
     scannerModule: requireFromCompiled(join(outDir, 'src', 'main', 'libraryScanner.js'))
   }
 }
@@ -609,5 +616,85 @@ test('library store reuses and invalidates rotation export cache records by sour
     } catch {
       // Preserve the primary assertion failure, if any.
     }
+  }
+})
+
+test('rotated drag export resolver can fail fast instead of rendering during drag', async () => {
+  const runtime = compileRuntimeModules()
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-drag-export-runtime-'))
+  const mediaDir = join(workspace, 'media')
+  const managedDir = join(workspace, 'managed')
+  const exportDir = join(workspace, 'exports')
+  const databaseFile = join(workspace, 'db', 'library.sqlite')
+  const sourceFile = join(mediaDir, 'sample.mp4')
+  const managedFile = join(managedDir, 'sample.mp4')
+  const exportFile = join(exportDir, 'rot90-ready.mp4')
+  let store
+
+  try {
+    mkdirSync(mediaDir, { recursive: true })
+    mkdirSync(managedDir, { recursive: true })
+    mkdirSync(exportDir, { recursive: true })
+    writeFileSync(sourceFile, 'store-only source video')
+    writeFileSync(managedFile, 'store-only managed video')
+
+    store = runtime.storeModule.openLibraryStore({
+      databaseFile,
+      libraryDir: managedDir,
+      now: () => 1_800_000_000_000,
+      createId: createIdGenerator()
+    }).value
+
+    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
+
+    assert.equal(copied.ok, true)
+
+    const input = {
+      store,
+      clipId: copied.value.clip.id,
+      sourcePath: managedFile,
+      sourceSizeBytes: 24,
+      sourceModifiedAtMs: 100,
+      rotationDegrees: 90,
+      exportCacheDir: exportDir,
+      renderIfMissing: false
+    }
+
+    const notPrepared = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
+
+    assert.equal(notPrepared.ok, false)
+    assert.equal(notPrepared.error.code, 'CLIP_EXPORT_FAILED')
+    assert.match(notPrepared.error.message, /not ready/i)
+
+    writeFileSync(exportFile, 'store-only rotated export')
+    const saved = store.upsertClipRotationExport({
+      clipId: copied.value.clip.id,
+      rotationDegrees: 90,
+      sourceSizeBytes: 24,
+      sourceModifiedAtMs: 100,
+      exportPath: exportFile
+    })
+
+    assert.equal(saved.ok, true)
+
+    const prepared = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
+
+    assert.equal(prepared.ok, true)
+    assert.equal(prepared.value, exportFile)
+    assert.equal(store.close().ok, true)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+
+    try {
+      rmSync(workspace, { recursive: true, force: true })
+    } catch {
+      // Preserve the primary assertion failure, if any.
+    }
+
+    rmSync(runtime.scratchRoot, { recursive: true, force: true })
   }
 })

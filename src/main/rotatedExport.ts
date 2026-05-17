@@ -2,12 +2,10 @@ import { createHash } from 'node:crypto'
 import { stat, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
+import ffmpegPath from 'ffmpeg-static'
 import type { ClipRotationDegrees, LibraryResult } from '../shared/clipdock'
 import type { LibraryStore } from './libraryStore'
 
-const requireFromMain = createRequire(import.meta.url)
-const ffmpegPath = requireFromMain('ffmpeg-static') as string | null
 const ROTATION_TIMEOUT_MS = 10 * 60 * 1000
 
 export interface ResolveRotatedExportInput {
@@ -18,6 +16,7 @@ export interface ResolveRotatedExportInput {
   sourceModifiedAtMs: number
   rotationDegrees: ClipRotationDegrees
   exportCacheDir: string
+  renderIfMissing?: boolean
 }
 
 function ok<T>(value: T): LibraryResult<T> {
@@ -62,7 +61,9 @@ async function renderRotation(
   outputPath: string,
   rotationDegrees: Exclude<ClipRotationDegrees, 0>
 ): Promise<LibraryResult<void>> {
-  if (!ffmpegPath) {
+  const executablePath = ffmpegPath
+
+  if (!executablePath) {
     return fail('FFmpeg is not available for rotated exports.')
   }
 
@@ -92,7 +93,7 @@ async function renderRotation(
   ]
 
   return await new Promise((resolve) => {
-    const child = spawn(ffmpegPath, args, { windowsHide: true })
+    const child = spawn(executablePath, args, { windowsHide: true })
     const errorChunks: Buffer[] = []
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
@@ -104,7 +105,7 @@ async function renderRotation(
       clearTimeout(timer)
       resolve(fail('Rotated export could not be started.'))
     })
-    child.on('close', (code) => {
+    child.on('close', (code: number | null) => {
       clearTimeout(timer)
 
       if (code === 0) {
@@ -138,6 +139,10 @@ export async function resolveRotatedExportPath(
 
   if (cached.value && (await fileExists(cached.value.exportPath))) {
     return ok(cached.value.exportPath)
+  }
+
+  if (input.renderIfMissing === false) {
+    return fail('Rotated export is not ready yet. Wait for ClipDock to finish preparing it.')
   }
 
   const outputPath = join(input.exportCacheDir, exportName(input))

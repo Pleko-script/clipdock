@@ -50,6 +50,7 @@ const REMOVE_CLIPS_FROM_LIBRARY_CHANNEL = 'clipdock:clip:remove-from-library'
 const UPDATE_CLIP_ROTATION_CHANNEL = 'clipdock:clip:update-rotation'
 const REVEAL_CLIP_CHANNEL = 'clipdock:clip:reveal'
 const COPY_CLIP_PATH_CHANNEL = 'clipdock:clip:copy-path'
+const PREPARE_CLIP_DRAG_CHANNEL = 'clipdock:clip:prepare-drag'
 const START_CLIP_DRAG_CHANNEL = 'clipdock:clip:start-drag'
 const SCAN_EVENT_CHANNEL = 'clipdock:library:scan-event'
 const CLIP_DRAG_EVENT_CHANNEL = 'clipdock:clip:drag-event'
@@ -71,7 +72,8 @@ const LIBRARY_INVOKE_CHANNELS = [
   REMOVE_CLIPS_FROM_LIBRARY_CHANNEL,
   UPDATE_CLIP_ROTATION_CHANNEL,
   REVEAL_CLIP_CHANNEL,
-  COPY_CLIP_PATH_CHANNEL
+  COPY_CLIP_PATH_CHANNEL,
+  PREPARE_CLIP_DRAG_CHANNEL
 ] as const
 
 const LIBRARY_ROOT_DIRNAME = 'clipdock-library'
@@ -843,7 +845,8 @@ async function validateClipFile(
 
 async function resolveDragFile(
   runtime: LibraryRuntime,
-  clipId: string
+  clipId: string,
+  options: { renderIfMissing: boolean }
 ): Promise<ClipdockResult<string>> {
   const asset = runtime.store.getClipDragAsset(clipId)
 
@@ -884,9 +887,38 @@ async function resolveDragFile(
       sourceSizeBytes: asset.value.sizeBytes,
       sourceModifiedAtMs: asset.value.modifiedAtMs,
       rotationDegrees: asset.value.rotationDegrees,
-      exportCacheDir: runtime.storage.exportCacheDir
+      exportCacheDir: runtime.storage.exportCacheDir,
+      renderIfMissing: options.renderIfMissing
     })
   )
+}
+
+async function prepareClipDrag(
+  ensureRuntime: () => LibraryResult<LibraryRuntime>,
+  request: ClipDragRequest
+): Promise<ClipdockResult<void>> {
+  const runtimeResult = ensureRuntime()
+  const clipIds = Array.isArray(request?.clipIds)
+    ? request.clipIds.filter(Boolean).slice(0, 32)
+    : []
+
+  if (!runtimeResult.ok) {
+    return fromLibraryResult(runtimeResult)
+  }
+
+  if (clipIds.length === 0) {
+    return fail('CLIP_NOT_FOUND', 'Select a clip before dragging.', { phase: 'drag' })
+  }
+
+  for (const clipId of clipIds) {
+    const prepared = await resolveDragFile(runtimeResult.value, clipId, { renderIfMissing: true })
+
+    if (!prepared.ok) {
+      return prepared
+    }
+  }
+
+  return ok(undefined)
 }
 
 function createDragIcon(): Electron.NativeImage {
@@ -926,7 +958,9 @@ async function startClipDrag(
   const files: string[] = []
 
   for (const clipId of clipIds) {
-    const validation = await resolveDragFile(runtimeResult.value, clipId)
+    const validation = await resolveDragFile(runtimeResult.value, clipId, {
+      renderIfMissing: false
+    })
 
     if (!validation.ok) {
       event.sender.send(CLIP_DRAG_EVENT_CHANNEL, {
@@ -1207,6 +1241,14 @@ export function registerLibraryIpc(
     clipboard.writeText(asset.value)
     return ok(undefined)
   })
+  resolvedDependencies.ipcMain.handle(PREPARE_CLIP_DRAG_CHANNEL, (_event, request: unknown) =>
+    prepareClipDrag(
+      ensureRuntime,
+      typeof request === 'object' && request !== null
+        ? (request as ClipDragRequest)
+        : { clipIds: [] }
+    )
+  )
   resolvedDependencies.ipcMain.on(
     START_CLIP_DRAG_CHANNEL,
     (event: IpcMainEvent, request: ClipDragRequest) => {

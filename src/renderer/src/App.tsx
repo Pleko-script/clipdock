@@ -387,12 +387,41 @@ function App(): JSX.Element {
       const api = getClipdockApi()
 
       if (!api) return
-      await runSnapshotAction(
-        () => api.updateClipRotation(clip.id, rotationDegrees),
-        'Saving rotation...'
-      )
+
+      setBusy(true)
+      setStatus('Saving rotation...')
+      const rotation = await api.updateClipRotation(clip.id, rotationDegrees)
+
+      if (!rotation.ok) {
+        setLastError(rotation.error)
+        setStatus(rotation.error.message)
+        setBusy(false)
+        return
+      }
+
+      applySnapshot(rotation.value)
+
+      if (rotationDegrees === 0) {
+        setLastError(null)
+        setStatus(`Loaded ${rotation.value.clips.length} clips.`)
+        setBusy(false)
+        return
+      }
+
+      setStatus('Preparing rotated drag export for timeline drop...')
+      const prepared = await api.prepareClipDrag({ clipIds: [clip.id] })
+
+      if (prepared.ok) {
+        setLastError(null)
+        setStatus('Rotated drag export ready.')
+      } else {
+        setLastError(prepared.error)
+        setStatus(prepared.error.message)
+      }
+
+      setBusy(false)
     },
-    [runSnapshotAction]
+    [applySnapshot]
   )
 
   const handleReveal = useCallback(async (clip: LibraryClipRecordSummary): Promise<void> => {
