@@ -5,8 +5,10 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   SUPPORTED_VIDEO_EXTENSIONS,
   type ClipImportMode,
+  type ClipRotationDegrees,
   type ClipdockErrorCode,
   type CopiedClipImportResult,
+  type LibraryBinRecordSummary,
   type LibraryClipRecordSummary,
   type LibraryClipStatus,
   type LibraryFailure,
@@ -21,7 +23,7 @@ import {
   type SupportedVideoExtension
 } from '../shared/clipdock'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const SQLITE_TRUE = 1
 const SQLITE_FALSE = 0
 const LINKED_FOLDER_MODE: ClipImportMode = 'linked-folder'
@@ -156,6 +158,7 @@ interface ClipRow {
   thumbnail_generated_at_ms: number | null
   favorite: number
   note: string
+  rotation_degrees: ClipRotationDegrees
   created_at_ms: number
   updated_at_ms: number
   last_error_code: ClipdockErrorCode | null
@@ -166,6 +169,21 @@ interface TagRow {
   id: string
   name: string
   normalized_name: string
+}
+
+interface BinRow {
+  id: string
+  name: string
+  normalized_name: string
+  sort_order: number
+  created_at_ms: number
+  updated_at_ms: number
+  clip_count: number
+}
+
+interface ClipBinRow {
+  clip_id: string
+  bin_id: string
 }
 
 interface NormalizedLocation {
@@ -307,7 +325,22 @@ function actualClipPath(row: ClipRow): string {
   return row.target_path ?? row.source_path
 }
 
-function clipSummaryFromRow(row: ClipRow, tags: string[]): LibraryClipRecordSummary {
+function binSummaryFromRow(row: BinRow): LibraryBinRecordSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    sortOrder: row.sort_order,
+    clipCount: row.clip_count,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms
+  }
+}
+
+function clipSummaryFromRow(
+  row: ClipRow,
+  tags: string[],
+  binIds: string[] = []
+): LibraryClipRecordSummary {
   const filePath = actualClipPath(row)
 
   return {
@@ -333,6 +366,8 @@ function clipSummaryFromRow(row: ClipRow, tags: string[]): LibraryClipRecordSumm
     favorite: row.favorite === SQLITE_TRUE,
     note: row.note,
     tags,
+    binIds,
+    rotationDegrees: row.rotation_degrees,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
     lastErrorCode: row.last_error_code,
@@ -490,6 +525,42 @@ class SqliteLibraryStore implements LibraryStore {
           PRIMARY KEY (clip_id, tag_id)
         );
 
+        CREATE TABLE IF NOT EXISTS bins (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL UNIQUE,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS clip_bins (
+          clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+          bin_id TEXT NOT NULL REFERENCES bins(id) ON DELETE CASCADE,
+          created_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (clip_id, bin_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS clip_exports (
+          id TEXT PRIMARY KEY,
+          clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+          variant_kind TEXT NOT NULL CHECK (variant_kind IN ('rotation')),
+          rotation_degrees INTEGER NOT NULL CHECK (rotation_degrees IN (90, 180, 270)),
+          source_size_bytes INTEGER NOT NULL,
+          source_modified_at_ms INTEGER NOT NULL,
+          export_path TEXT NOT NULL,
+          normalized_export_path TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          UNIQUE (
+            clip_id,
+            variant_kind,
+            rotation_degrees,
+            source_size_bytes,
+            source_modified_at_ms
+          )
+        );
+
         CREATE INDEX IF NOT EXISTS idx_library_sources_kind_status
           ON library_sources(kind, status);
         CREATE INDEX IF NOT EXISTS idx_library_sources_import_mode
@@ -514,11 +585,25 @@ class SqliteLibraryStore implements LibraryStore {
           ON clip_tags(clip_id);
         CREATE INDEX IF NOT EXISTS idx_clip_tags_tag_id
           ON clip_tags(tag_id);
+        CREATE INDEX IF NOT EXISTS idx_bins_sort_order
+          ON bins(sort_order, name);
+        CREATE INDEX IF NOT EXISTS idx_clip_bins_clip_id
+          ON clip_bins(clip_id);
+        CREATE INDEX IF NOT EXISTS idx_clip_bins_bin_id
+          ON clip_bins(bin_id);
+        CREATE INDEX IF NOT EXISTS idx_clip_exports_clip_variant
+          ON clip_exports(clip_id, variant_kind, rotation_degrees);
       `)
 
       ensureColumn(this.database, 'clips', 'file_created_at_ms', 'file_created_at_ms INTEGER')
       ensureColumn(this.database, 'clips', 'fps', 'fps REAL')
       ensureColumn(this.database, 'clips', 'codec', 'codec TEXT')
+      ensureColumn(
+        this.database,
+        'clips',
+        'rotation_degrees',
+        'rotation_degrees INTEGER NOT NULL DEFAULT 0 CHECK (rotation_degrees IN (0, 90, 180, 270))'
+      )
 
       try {
         this.database.exec(`
@@ -571,11 +656,16 @@ class SqliteLibraryStore implements LibraryStore {
         )
         .all() as unknown as ClipRow[]
       const tagsByClipId = this.readTagsByClipId()
+      const binRows = this.readBins()
+      const binIdsByClipId = this.readBinIdsByClipId()
 
       return ok({
         generatedAtMs: nowMs(this.now),
         sources: sourceRows.map(sourceSummaryFromRow),
-        clips: clipRows.map((row) => clipSummaryFromRow(row, tagsByClipId.get(row.id) ?? []))
+        bins: binRows.map(binSummaryFromRow),
+        clips: clipRows.map((row) =>
+          clipSummaryFromRow(row, tagsByClipId.get(row.id) ?? [], binIdsByClipId.get(row.id) ?? [])
+        )
       })
     } catch {
       return fail(
@@ -1442,6 +1532,39 @@ class SqliteLibraryStore implements LibraryStore {
     }
 
     return tagsByClipId
+  }
+
+  private readBinIdsByClipId(): Map<string, string[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT clip_id, bin_id
+           FROM clip_bins
+          ORDER BY created_at_ms ASC, bin_id ASC`
+      )
+      .all() as unknown as ClipBinRow[]
+    const byClipId = new Map<string, string[]>()
+
+    for (const row of rows) {
+      const binIds = byClipId.get(row.clip_id) ?? []
+
+      binIds.push(row.bin_id)
+      byClipId.set(row.clip_id, binIds)
+    }
+
+    return byClipId
+  }
+
+  private readBins(): BinRow[] {
+    return this.database
+      .prepare(
+        `SELECT b.*, COUNT(c.id) AS clip_count
+           FROM bins b
+           LEFT JOIN clip_bins cb ON cb.bin_id = b.id
+           LEFT JOIN clips c ON c.id = cb.clip_id AND c.status != 'removed'
+          GROUP BY b.id
+          ORDER BY b.sort_order ASC, b.name COLLATE NOCASE ASC`
+      )
+      .all() as unknown as BinRow[]
   }
 
   private readTagsForClip(clipId: string): string[] {
