@@ -1091,13 +1091,16 @@ export function registerLibraryIpc(
   resolvedDependencies.ipcMain.handle(CREATE_BIN_CHANNEL, (_event, name: unknown) =>
     updateSnapshot(ensureRuntime, (store) => store.createBin(validText(name)))
   )
-  resolvedDependencies.ipcMain.handle(RENAME_BIN_CHANNEL, (_event, binId: unknown, name: unknown) => {
-    const id = validClipId(binId)
+  resolvedDependencies.ipcMain.handle(
+    RENAME_BIN_CHANNEL,
+    (_event, binId: unknown, name: unknown) => {
+      const id = validClipId(binId)
 
-    return id
-      ? updateSnapshot(ensureRuntime, (store) => store.renameBin(id, validText(name)))
-      : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
-  })
+      return id
+        ? updateSnapshot(ensureRuntime, (store) => store.renameBin(id, validText(name)))
+        : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
+    }
+  )
   resolvedDependencies.ipcMain.handle(DELETE_BIN_CHANNEL, (_event, binId: unknown) => {
     const id = validClipId(binId)
 
@@ -1142,8 +1145,10 @@ export function registerLibraryIpc(
         : fail('LIBRARY_INVALID_INPUT', 'A valid bin id is required.', { phase: 'bin' })
     }
   )
-  resolvedDependencies.ipcMain.handle(REMOVE_CLIPS_FROM_LIBRARY_CHANNEL, (_event, clipIds: unknown) =>
-    updateSnapshot(ensureRuntime, (store) => store.removeClipsFromLibrary(validClipIds(clipIds)))
+  resolvedDependencies.ipcMain.handle(
+    REMOVE_CLIPS_FROM_LIBRARY_CHANNEL,
+    (_event, clipIds: unknown) =>
+      updateSnapshot(ensureRuntime, (store) => store.removeClipsFromLibrary(validClipIds(clipIds)))
   )
   resolvedDependencies.ipcMain.handle(
     UPDATE_CLIP_ROTATION_CHANNEL,

@@ -285,10 +285,7 @@ export interface ClipdockApi {
     fromBinId: string,
     toBinId: string
   ) => Promise<ClipdockResult<LibrarySnapshot>>
-  removeClipsFromBin: (
-    clipIds: string[],
-    binId: string
-  ) => Promise<ClipdockResult<LibrarySnapshot>>
+  removeClipsFromBin: (clipIds: string[], binId: string) => Promise<ClipdockResult<LibrarySnapshot>>
   removeClipsFromLibrary: (clipIds: string[]) => Promise<ClipdockResult<LibrarySnapshot>>
   updateClipRotation: (
     clipId: string,

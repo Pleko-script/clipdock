@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type DragEvent,
   type JSX,
@@ -11,12 +10,18 @@ import {
 import type {
   ClipdockApi,
   ClipdockError,
+  ClipRotationDegrees,
+  LibraryBinRecordSummary,
   LibraryClipRecordSummary,
   LibrarySnapshot,
-  LibrarySourceRecordSummary,
   ScanEvent,
   ScanSummary
 } from '../../shared/clipdock'
+import { ClipGrid } from './components/ClipGrid'
+import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
+import { PreviewStage } from './components/PreviewStage'
+import { Sidebar } from './components/Sidebar'
+import { useClipSelection } from './hooks/useClipSelection'
 
 const EMPTY_STATUS = 'Add a folder to start building the local video library.'
 
@@ -30,50 +35,6 @@ function createPreloadError(
   return { code: 'PRELOAD_IPC_FAILED', message }
 }
 
-function formatBytes(sizeBytes: number): string {
-  if (sizeBytes <= 0) return '0 MB'
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = sizeBytes
-  let unitIndex = 0
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  return `${new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: value >= 10 ? 0 : 1
-  }).format(value)} ${units[unitIndex]}`
-}
-
-function formatDuration(durationMs: number | null): string {
-  if (!durationMs || durationMs <= 0) return '--:--'
-
-  const totalSeconds = Math.round(durationMs / 1000)
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    : `${minutes}:${String(seconds).padStart(2, '0')}`
-}
-
-function formatResolution(clip: LibraryClipRecordSummary): string {
-  return clip.widthPixels && clip.heightPixels
-    ? `${clip.widthPixels} x ${clip.heightPixels}`
-    : 'Unknown'
-}
-
-function formatDate(timestampMs: number | null): string {
-  if (!timestampMs) return 'Unknown'
-
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(timestampMs)
-  )
-}
-
 function scanStatus(summary: ScanSummary): string {
   return `Scan complete: ${summary.importedClips} new, ${summary.updatedClips} updated, ${summary.skippedClips} cached, ${summary.failedClips} with issues.`
 }
@@ -82,360 +43,35 @@ function clipSearchHaystack(clip: LibraryClipRecordSummary): string {
   return [clip.displayName, clip.filePath, clip.note, ...clip.tags].join(' ').toLocaleLowerCase()
 }
 
-function allTags(clips: LibraryClipRecordSummary[]): string[] {
-  return [...new Set(clips.flatMap((clip) => clip.tags))].sort((left, right) =>
-    left.localeCompare(right)
-  )
-}
-
-function Sidebar({
-  sources,
-  clips,
-  selectedTag,
-  favoriteOnly,
-  onSelectTag,
-  onShowFavorites,
-  onShowAll,
-  onAddFolder,
-  onCopyVideos,
-  busy
-}: {
-  sources: LibrarySourceRecordSummary[]
-  clips: LibraryClipRecordSummary[]
-  selectedTag: string | null
-  favoriteOnly: boolean
-  onSelectTag: (tag: string) => void
-  onShowFavorites: () => void
-  onShowAll: () => void
-  onAddFolder: () => void
-  onCopyVideos: () => void
-  busy: boolean
-}): JSX.Element {
-  const tags = allTags(clips)
-
-  return (
-    <aside className="sidebar">
-      <div className="brand">
-        <span className="brand-mark">CD</span>
-        <div>
-          <h1>ClipDock</h1>
-          <p>Local video library</p>
-        </div>
-      </div>
-
-      <div className="sidebar-actions">
-        <button type="button" className="primary-button" onClick={onAddFolder} disabled={busy}>
-          Add Folder
-        </button>
-        <button type="button" className="ghost-button" onClick={onCopyVideos} disabled={busy}>
-          Copy Videos
-        </button>
-      </div>
-
-      <nav className="nav-list" aria-label="Library filters">
-        <button
-          type="button"
-          className={!favoriteOnly && !selectedTag ? 'active' : ''}
-          onClick={onShowAll}
-        >
-          All Clips <span>{clips.length}</span>
-        </button>
-        <button type="button" className={favoriteOnly ? 'active' : ''} onClick={onShowFavorites}>
-          Favorites <span>{clips.filter((clip) => clip.favorite).length}</span>
-        </button>
-      </nav>
-
-      <section className="sidebar-section">
-        <h2>Tags</h2>
-        <div className="tag-list">
-          {tags.length === 0 ? <span className="muted">No tags</span> : null}
-          {tags.map((tag) => (
-            <button
-              type="button"
-              key={tag}
-              className={selectedTag === tag ? 'tag-filter active' : 'tag-filter'}
-              onClick={() => onSelectTag(tag)}
-            >
-              {tag}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="sidebar-section sources">
-        <h2>Folders</h2>
-        {sources.length === 0 ? <span className="muted">No folders</span> : null}
-        {sources.map((source) => (
-          <div className="source-row" key={source.id} title={source.displayLocation}>
-            <strong>{source.displayName}</strong>
-            <span>{source.clipCount} clips</span>
-          </div>
-        ))}
-      </section>
-    </aside>
-  )
-}
-
-function ClipCard({
-  clip,
-  selected,
-  active,
-  onSelect,
-  onOpen,
-  onDrag,
-  onToggleFavorite
-}: {
-  clip: LibraryClipRecordSummary
-  selected: boolean
-  active: boolean
-  onSelect: (event: MouseEvent) => void
-  onOpen: () => void
-  onDrag: (event: DragEvent<HTMLElement>) => void
-  onToggleFavorite: () => void
-}): JSX.Element {
-  return (
-    <article
-      className={`clip-card${selected ? ' selected' : ''}${active ? ' active' : ''}`}
-      draggable
-      onClick={onSelect}
-      onDoubleClick={onOpen}
-      onDragStart={onDrag}
-      title={clip.filePath}
-    >
-      <div className="thumb">
-        {clip.thumbnailUrl ? (
-          <img src={clip.thumbnailUrl} loading="lazy" alt="" draggable={false} />
-        ) : null}
-        {!clip.thumbnailUrl ? <div className="thumb-placeholder">No thumbnail</div> : null}
-        <span>{formatDuration(clip.durationMs)}</span>
-      </div>
-      <div className="clip-card-body">
-        <div className="clip-card-title">
-          <h3>{clip.displayName}</h3>
-          <button
-            type="button"
-            className={clip.favorite ? 'favorite active' : 'favorite'}
-            onClick={(event) => {
-              event.stopPropagation()
-              onToggleFavorite()
-            }}
-            aria-label={clip.favorite ? 'Remove favorite' : 'Mark favorite'}
-          >
-            {clip.favorite ? 'Fav' : 'Star'}
-          </button>
-        </div>
-        <p>
-          {formatResolution(clip)} {clip.codec ? `| ${clip.codec}` : ''}
-        </p>
-        <div className="clip-tags">
-          {clip.tags.slice(0, 3).map((tag) => (
-            <span key={tag}>{tag}</span>
-          ))}
-        </div>
-      </div>
-    </article>
-  )
-}
-
-function ClipGrid({
-  clips,
-  activeClipId,
-  selectedClipIds,
-  onSelectClip,
-  onOpenClip,
-  onDragClip,
-  onToggleFavorite
-}: {
-  clips: LibraryClipRecordSummary[]
-  activeClipId: string | null
+function selectedIdsForClip(
+  clip: LibraryClipRecordSummary,
   selectedClipIds: Set<string>
-  onSelectClip: (clip: LibraryClipRecordSummary, event: MouseEvent) => void
-  onOpenClip: (clip: LibraryClipRecordSummary) => void
-  onDragClip: (clip: LibraryClipRecordSummary, event: DragEvent<HTMLElement>) => void
-  onToggleFavorite: (clip: LibraryClipRecordSummary) => void
-}): JSX.Element {
-  if (clips.length === 0) {
-    return (
-      <div className="empty-grid">
-        <strong>No clips</strong>
-        <span>{EMPTY_STATUS}</span>
-      </div>
-    )
-  }
-
-  return (
-    <section className="clip-grid" aria-label="Clip grid">
-      {clips.map((clip) => (
-        <ClipCard
-          key={clip.id}
-          clip={clip}
-          selected={selectedClipIds.has(clip.id)}
-          active={activeClipId === clip.id}
-          onSelect={(event) => onSelectClip(clip, event)}
-          onOpen={() => onOpenClip(clip)}
-          onDrag={(event) => onDragClip(clip, event)}
-          onToggleFavorite={() => onToggleFavorite(clip)}
-        />
-      ))}
-    </section>
-  )
+): string[] {
+  return selectedClipIds.has(clip.id) ? [...selectedClipIds] : [clip.id]
 }
 
-function TagEditor({
-  clip,
-  onSave
-}: {
-  clip: LibraryClipRecordSummary
-  onSave: (tags: string[]) => void
-}): JSX.Element {
-  const [draft, setDraft] = useState('')
+function promptForBin(
+  bins: LibraryBinRecordSummary[],
+  title: string,
+  excludedBinId?: string | null
+): LibraryBinRecordSummary | null {
+  const choices = bins.filter((bin) => bin.id !== excludedBinId)
 
-  const removeTag = (tag: string): void => {
-    onSave(clip.tags.filter((existing) => existing !== tag))
+  if (choices.length === 0) {
+    window.alert('No target bins available.')
+    return null
   }
 
-  const addTag = (): void => {
-    const tag = draft.trim().replace(/\s+/g, ' ')
+  const answer = window.prompt(`${title}\n${choices.map((bin) => bin.name).join(', ')}`)
 
-    if (tag.length === 0) return
+  if (!answer) return null
 
-    onSave([...new Set([...clip.tags, tag])])
-    setDraft('')
-  }
+  const normalized = answer.trim().toLocaleLowerCase()
 
   return (
-    <div className="tag-editor">
-      <div className="editable-tags">
-        {clip.tags.length === 0 ? <span className="muted">No tags</span> : null}
-        {clip.tags.map((tag) => (
-          <button type="button" key={tag} onClick={() => removeTag(tag)}>
-            {tag} x
-          </button>
-        ))}
-      </div>
-      <div className="tag-input-row">
-        <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') addTag()
-          }}
-          placeholder="Add tag"
-        />
-        <button type="button" onClick={addTag}>
-          Add
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function NoteEditor({
-  clip,
-  onSave
-}: {
-  clip: LibraryClipRecordSummary
-  onSave: (note: string) => void
-}): JSX.Element {
-  const [noteDraft, setNoteDraft] = useState(clip.note)
-
-  return (
-    <>
-      <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} />
-      <button type="button" className="ghost-button" onClick={() => onSave(noteDraft)}>
-        Save Note
-      </button>
-    </>
-  )
-}
-
-function DetailsPanel({
-  clip,
-  onToggleFavorite,
-  onUpdateTags,
-  onUpdateNote,
-  onReveal,
-  onCopyPath
-}: {
-  clip: LibraryClipRecordSummary | null
-  onToggleFavorite: (clip: LibraryClipRecordSummary) => void
-  onUpdateTags: (clip: LibraryClipRecordSummary, tags: string[]) => void
-  onUpdateNote: (clip: LibraryClipRecordSummary, note: string) => void
-  onReveal: (clip: LibraryClipRecordSummary) => void
-  onCopyPath: (clip: LibraryClipRecordSummary) => void
-}): JSX.Element {
-  if (!clip) {
-    return (
-      <aside className="details-panel empty">
-        <strong>No clip selected</strong>
-        <span>Select a clip to preview it.</span>
-      </aside>
-    )
-  }
-
-  return (
-    <aside className="details-panel">
-      <video className="preview-video" src={clip.previewUrl} controls preload="metadata" />
-      <div className="details-heading">
-        <div>
-          <h2>{clip.displayName}</h2>
-          <p>{clip.filePath}</p>
-        </div>
-        <button
-          type="button"
-          className={clip.favorite ? 'favorite large active' : 'favorite large'}
-          onClick={() => onToggleFavorite(clip)}
-        >
-          {clip.favorite ? 'Favorite' : 'Star'}
-        </button>
-      </div>
-
-      <dl className="metadata-grid">
-        <div>
-          <dt>Duration</dt>
-          <dd>{formatDuration(clip.durationMs)}</dd>
-        </div>
-        <div>
-          <dt>Resolution</dt>
-          <dd>{formatResolution(clip)}</dd>
-        </div>
-        <div>
-          <dt>FPS</dt>
-          <dd>{clip.fps ?? 'Unknown'}</dd>
-        </div>
-        <div>
-          <dt>Codec</dt>
-          <dd>{clip.codec ?? 'Unknown'}</dd>
-        </div>
-        <div>
-          <dt>Size</dt>
-          <dd>{formatBytes(clip.sizeBytes)}</dd>
-        </div>
-        <div>
-          <dt>Modified</dt>
-          <dd>{formatDate(clip.modifiedAtMs)}</dd>
-        </div>
-      </dl>
-
-      <section className="detail-section">
-        <h3>Tags</h3>
-        <TagEditor key={clip.id} clip={clip} onSave={(tags) => onUpdateTags(clip, tags)} />
-      </section>
-
-      <section className="detail-section">
-        <h3>Notes</h3>
-        <NoteEditor key={clip.id} clip={clip} onSave={(note) => onUpdateNote(clip, note)} />
-      </section>
-
-      <div className="detail-actions">
-        <button type="button" onClick={() => onReveal(clip)}>
-          Reveal in Explorer
-        </button>
-        <button type="button" onClick={() => onCopyPath(clip)}>
-          Copy Path
-        </button>
-      </div>
-    </aside>
+    choices.find(
+      (bin) => bin.id === answer.trim() || bin.name.trim().toLocaleLowerCase() === normalized
+    ) ?? null
   )
 }
 
@@ -453,22 +89,16 @@ function App(): JSX.Element {
   const [sortMode, setSortMode] = useState('name')
   const [favoriteOnly, setFavoriteOnly] = useState(false)
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
-  const [activeClipId, setActiveClipId] = useState<string | null>(null)
-  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set())
-  const selectedClipIdsRef = useRef(selectedClipIds)
-  const activeClipIdRef = useRef(activeClipId)
-
-  useEffect(() => {
-    selectedClipIdsRef.current = selectedClipIds
-  }, [selectedClipIds])
-
-  useEffect(() => {
-    activeClipIdRef.current = activeClipId
-  }, [activeClipId])
+  const [activeBinId, setActiveBinId] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    items: ContextMenuItem[]
+  } | null>(null)
 
   const clips = useMemo(() => snapshot?.clips ?? [], [snapshot])
   const sources = useMemo(() => snapshot?.sources ?? [], [snapshot])
-  const activeClip = clips.find((clip) => clip.id === activeClipId) ?? clips[0] ?? null
+  const bins = useMemo(() => snapshot?.bins ?? [], [snapshot])
 
   useEffect(() => {
     const timer = window.setTimeout(
@@ -483,6 +113,7 @@ function App(): JSX.Element {
     const filtered = clips.filter((clip) => {
       if (favoriteOnly && !clip.favorite) return false
       if (selectedTag && !clip.tags.includes(selectedTag)) return false
+      if (activeBinId && !clip.binIds.includes(activeBinId)) return false
       if (debouncedSearch && !clipSearchHaystack(clip).includes(debouncedSearch)) return false
 
       return true
@@ -495,25 +126,21 @@ function App(): JSX.Element {
 
       return left.displayName.localeCompare(right.displayName)
     })
-  }, [clips, debouncedSearch, favoriteOnly, selectedTag, sortMode])
+  }, [activeBinId, clips, debouncedSearch, favoriteOnly, selectedTag, sortMode])
+
+  const {
+    activeClip,
+    activeClipId,
+    selectedClipIds,
+    selectedClipIdsRef,
+    setActiveClipId,
+    setSelectedClipIds,
+    selectClip,
+    openClip
+  } = useClipSelection(filteredClips)
 
   const applySnapshot = useCallback((nextSnapshot: LibrarySnapshot): void => {
     setSnapshot(nextSnapshot)
-    setSelectedClipIds(
-      (current) =>
-        new Set(
-          [...current].filter((clipId) => nextSnapshot.clips.some((clip) => clip.id === clipId))
-        )
-    )
-
-    const currentActiveClipId = activeClipIdRef.current
-
-    if (
-      !currentActiveClipId ||
-      !nextSnapshot.clips.some((clip) => clip.id === currentActiveClipId)
-    ) {
-      setActiveClipId(nextSnapshot.clips[0]?.id ?? null)
-    }
   }, [])
 
   useEffect(() => {
@@ -703,33 +330,8 @@ function App(): JSX.Element {
     setBusy(false)
   }, [applySnapshot])
 
-  const handleSelectClip = useCallback(
-    (clip: LibraryClipRecordSummary, event: MouseEvent): void => {
-      setActiveClipId(clip.id)
-      setSelectedClipIds((current) => {
-        const next = new Set(event.metaKey || event.ctrlKey ? current : [])
-
-        if (event.metaKey || event.ctrlKey) {
-          if (next.has(clip.id)) next.delete(clip.id)
-          else next.add(clip.id)
-        } else {
-          next.add(clip.id)
-        }
-
-        return next
-      })
-    },
-    []
-  )
-
-  const handleOpenClip = useCallback((clip: LibraryClipRecordSummary): void => {
-    setActiveClipId(clip.id)
-    setSelectedClipIds(new Set([clip.id]))
-  }, [])
-
   const handleDragClip = useCallback(
     (clip: LibraryClipRecordSummary, event: DragEvent<HTMLElement>): void => {
-      event.preventDefault()
       const api = getClipdockApi()
 
       if (!api) {
@@ -737,10 +339,9 @@ function App(): JSX.Element {
         return
       }
 
-      const selectedIds = selectedClipIdsRef.current.has(clip.id)
-        ? [...selectedClipIdsRef.current]
-        : [clip.id]
+      const selectedIds = selectedIdsForClip(clip, selectedClipIdsRef.current)
 
+      event.dataTransfer.setData('application/x-clipdock-clip-ids', JSON.stringify(selectedIds))
       setSelectedClipIds(new Set(selectedIds))
       setActiveClipId(clip.id)
       setStatus(
@@ -748,7 +349,7 @@ function App(): JSX.Element {
       )
       api.startClipDrag({ clipIds: selectedIds })
     },
-    []
+    [selectedClipIdsRef, setActiveClipId, setSelectedClipIds]
   )
 
   const handleToggleFavorite = useCallback(
@@ -781,6 +382,19 @@ function App(): JSX.Element {
     [runSnapshotAction]
   )
 
+  const handleUpdateRotation = useCallback(
+    async (clip: LibraryClipRecordSummary, rotationDegrees: ClipRotationDegrees): Promise<void> => {
+      const api = getClipdockApi()
+
+      if (!api) return
+      await runSnapshotAction(
+        () => api.updateClipRotation(clip.id, rotationDegrees),
+        'Saving rotation...'
+      )
+    },
+    [runSnapshotAction]
+  )
+
   const handleReveal = useCallback(async (clip: LibraryClipRecordSummary): Promise<void> => {
     const api = getClipdockApi()
 
@@ -803,27 +417,200 @@ function App(): JSX.Element {
     }
   }, [])
 
+  const handleCreateBin = useCallback(async (): Promise<void> => {
+    const name = window.prompt('Bin name')
+    const api = getClipdockApi()
+
+    if (!api || !name) return
+    await runSnapshotAction(() => api.createBin(name), 'Creating bin...')
+  }, [runSnapshotAction])
+
+  const handleRenameBin = useCallback(
+    async (binId: string): Promise<void> => {
+      const current = bins.find((bin) => bin.id === binId)
+      const name = window.prompt('Bin name', current?.name ?? '')
+      const api = getClipdockApi()
+
+      if (!api || !name) return
+      await runSnapshotAction(() => api.renameBin(binId, name), 'Renaming bin...')
+    },
+    [bins, runSnapshotAction]
+  )
+
+  const handleDeleteBin = useCallback(
+    async (binId: string): Promise<void> => {
+      const api = getClipdockApi()
+
+      if (!api || !window.confirm('Delete this bin from ClipDock?')) return
+      await runSnapshotAction(() => api.deleteBin(binId), 'Deleting bin...')
+      if (activeBinId === binId) setActiveBinId(null)
+    },
+    [activeBinId, runSnapshotAction]
+  )
+
+  const handleDropClipsToBin = useCallback(
+    async (clipIds: string[], binId: string): Promise<void> => {
+      const api = getClipdockApi()
+
+      if (!api || clipIds.length === 0) return
+      await runSnapshotAction(() => api.addClipsToBin(clipIds, binId), 'Adding clips to bin...')
+    },
+    [runSnapshotAction]
+  )
+
+  const handleOpenClipMenu = useCallback(
+    (clip: LibraryClipRecordSummary, event: MouseEvent): void => {
+      event.preventDefault()
+
+      const api = getClipdockApi()
+      const clipIds = selectedIdsForClip(clip, selectedClipIdsRef.current)
+      const items: ContextMenuItem[] = [
+        {
+          id: 'favorite',
+          label: clip.favorite ? 'Remove favorite' : 'Mark favorite',
+          onSelect: () => void handleToggleFavorite(clip)
+        },
+        {
+          id: 'add-to-bin',
+          label: 'Add to bin',
+          disabled: bins.length === 0,
+          onSelect: () => {
+            const bin = promptForBin(bins, 'Add to bin')
+
+            if (api && bin) {
+              void runSnapshotAction(
+                () => api.addClipsToBin(clipIds, bin.id),
+                'Adding clips to bin...'
+              )
+            }
+          }
+        },
+        {
+          id: 'move-to-bin',
+          label: 'Move to bin',
+          disabled: !activeBinId || bins.length < 2,
+          onSelect: () => {
+            const bin = promptForBin(bins, 'Move to bin', activeBinId)
+
+            if (api && bin && activeBinId) {
+              void runSnapshotAction(
+                () => api.moveClipsToBin(clipIds, activeBinId, bin.id),
+                'Moving clips...'
+              )
+            }
+          }
+        },
+        {
+          id: 'remove-from-bin',
+          label: 'Remove from current bin',
+          disabled: !activeBinId,
+          onSelect: () => {
+            if (api && activeBinId) {
+              void runSnapshotAction(
+                () => api.removeClipsFromBin(clipIds, activeBinId),
+                'Removing clips from bin...'
+              )
+            }
+          }
+        },
+        {
+          id: 'reveal',
+          label: 'Reveal in Explorer',
+          onSelect: () => void handleReveal(clip)
+        },
+        {
+          id: 'copy-path',
+          label: 'Copy Path',
+          onSelect: () => void handleCopyPath(clip)
+        },
+        {
+          id: 'remove-library',
+          label: 'Remove from ClipDock',
+          destructive: true,
+          onSelect: () => {
+            if (
+              api &&
+              window.confirm('Remove selected clips from ClipDock? Source files stay on disk.')
+            ) {
+              void runSnapshotAction(
+                () => api.removeClipsFromLibrary(clipIds),
+                'Removing clips from ClipDock...'
+              )
+            }
+          }
+        }
+      ]
+
+      setContextMenu({ x: event.clientX, y: event.clientY, items })
+    },
+    [
+      activeBinId,
+      bins,
+      handleCopyPath,
+      handleReveal,
+      handleToggleFavorite,
+      runSnapshotAction,
+      selectedClipIdsRef
+    ]
+  )
+
+  const handleOpenBinMenu = useCallback(
+    (binId: string, x: number, y: number): void => {
+      setContextMenu({
+        x,
+        y,
+        items: [
+          {
+            id: 'rename-bin',
+            label: 'Rename bin',
+            onSelect: () => void handleRenameBin(binId)
+          },
+          {
+            id: 'delete-bin',
+            label: 'Delete bin',
+            destructive: true,
+            onSelect: () => void handleDeleteBin(binId)
+          }
+        ]
+      })
+    },
+    [handleDeleteBin, handleRenameBin]
+  )
+
   return (
     <main className="app-shell">
       <Sidebar
         sources={sources}
         clips={clips}
+        bins={bins}
         selectedTag={selectedTag}
         favoriteOnly={favoriteOnly}
+        activeBinId={activeBinId}
         onSelectTag={(tag) => {
           setSelectedTag(tag)
           setFavoriteOnly(false)
+          setActiveBinId(null)
         }}
         onShowFavorites={() => {
           setFavoriteOnly(true)
           setSelectedTag(null)
+          setActiveBinId(null)
         }}
         onShowAll={() => {
+          setFavoriteOnly(false)
+          setSelectedTag(null)
+          setActiveBinId(null)
+        }}
+        onSelectBin={(binId) => {
+          setActiveBinId(binId)
           setFavoriteOnly(false)
           setSelectedTag(null)
         }}
         onAddFolder={handleAddFolder}
         onCopyVideos={handleCopyVideos}
+        onCreateBin={handleCreateBin}
+        onOpenBinMenu={handleOpenBinMenu}
+        onDropClipsToBin={handleDropClipsToBin}
         busy={busy}
       />
 
@@ -850,7 +637,10 @@ function App(): JSX.Element {
             <input
               type="checkbox"
               checked={favoriteOnly}
-              onChange={(event) => setFavoriteOnly(event.target.checked)}
+              onChange={(event) => {
+                setFavoriteOnly(event.target.checked)
+                setActiveBinId(null)
+              }}
             />
             Favorites
           </label>
@@ -858,6 +648,16 @@ function App(): JSX.Element {
             Rescan
           </button>
         </header>
+
+        <PreviewStage
+          clip={activeClip}
+          onToggleFavorite={handleToggleFavorite}
+          onUpdateTags={handleUpdateTags}
+          onUpdateNote={handleUpdateNote}
+          onReveal={handleReveal}
+          onCopyPath={handleCopyPath}
+          onRotate={handleUpdateRotation}
+        />
 
         <div className="library-meta">
           <span>{filteredClips.length} visible</span>
@@ -867,11 +667,12 @@ function App(): JSX.Element {
 
         <ClipGrid
           clips={filteredClips}
-          activeClipId={activeClip?.id ?? null}
+          activeClipId={activeClipId}
           selectedClipIds={selectedClipIds}
-          onSelectClip={handleSelectClip}
-          onOpenClip={handleOpenClip}
+          onSelectClip={selectClip}
+          onOpenClip={openClip}
           onDragClip={handleDragClip}
+          onOpenClipMenu={handleOpenClipMenu}
           onToggleFavorite={handleToggleFavorite}
         />
 
@@ -885,14 +686,14 @@ function App(): JSX.Element {
         </footer>
       </section>
 
-      <DetailsPanel
-        clip={activeClip}
-        onToggleFavorite={handleToggleFavorite}
-        onUpdateTags={handleUpdateTags}
-        onUpdateNote={handleUpdateNote}
-        onReveal={handleReveal}
-        onCopyPath={handleCopyPath}
-      />
+      {contextMenu ? (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
+      ) : null}
     </main>
   )
 }

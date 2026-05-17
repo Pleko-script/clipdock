@@ -20,6 +20,10 @@ const store = read('src/main/libraryStore.ts')
 const ipc = read('src/main/libraryIpc.ts')
 const preload = read('src/preload/index.ts')
 const app = read('src/renderer/src/App.tsx')
+const previewStage = read('src/renderer/src/components/PreviewStage.tsx')
+const sidebarComponent = read('src/renderer/src/components/Sidebar.tsx')
+const clipGridComponent = read('src/renderer/src/components/ClipGrid.tsx')
+const contextMenuComponent = read('src/renderer/src/components/ContextMenu.tsx')
 const html = read('src/renderer/index.html')
 const builder = read('electron-builder.yml')
 const readme = read('README.md')
@@ -170,23 +174,37 @@ test('preload exposes only the typed clipdock bridge and no raw node/electron AP
 })
 
 test('renderer implements the main visual workflow without direct Node access', () => {
+  const rendererSurface = [
+    app,
+    previewStage,
+    sidebarComponent,
+    clipGridComponent,
+    contextMenuComponent
+  ].join('\n')
+
   for (const forbidden of [/from ['"`]electron['"`]/, /from ['"`]node:/, /\bipcRenderer\b/]) {
-    assert.doesNotMatch(app, forbidden)
+    assert.doesNotMatch(rendererSurface, forbidden)
   }
 
   for (const surface of [
     'ClipGrid',
     'ClipCard',
-    'DetailsPanel',
+    'PreviewStage',
+    'ContextMenu',
     'TagEditor',
     'onDragStart',
+    'onDrop',
     'startClipDrag',
     'previewUrl',
+    'rotationDegrees',
+    'Bins',
+    'Add Bin',
+    'Remove from ClipDock',
     'Search filename, path, tags, notes',
     'Reveal in Explorer',
     'Copy Path'
   ]) {
-    assert.match(app, new RegExp(surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.match(rendererSurface, new RegExp(surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   }
 })
 
