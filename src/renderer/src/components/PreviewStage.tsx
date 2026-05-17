@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react'
+import { useState, type DragEvent, type JSX } from 'react'
 import type { ClipRotationDegrees, LibraryClipRecordSummary } from '../../../shared/clipdock'
 
 function formatBytes(sizeBytes: number): string {
@@ -120,6 +120,7 @@ export function PreviewStage({
   onUpdateNote,
   onReveal,
   onCopyPath,
+  onDragClip,
   onRotate
 }: {
   clip: LibraryClipRecordSummary | null
@@ -128,6 +129,7 @@ export function PreviewStage({
   onUpdateNote: (clip: LibraryClipRecordSummary, note: string) => void
   onReveal: (clip: LibraryClipRecordSummary) => void
   onCopyPath: (clip: LibraryClipRecordSummary) => void
+  onDragClip: (clip: LibraryClipRecordSummary, event: DragEvent<HTMLElement>) => void
   onRotate: (clip: LibraryClipRecordSummary, rotationDegrees: ClipRotationDegrees) => void
 }): JSX.Element {
   if (!clip) {
@@ -141,11 +143,17 @@ export function PreviewStage({
 
   return (
     <section className="preview-stage">
-      <div className="preview-video-shell">
+      <div
+        className="preview-video-shell"
+        draggable
+        onDragStart={(event) => onDragClip(clip, event)}
+        title="Drag preview to timeline"
+      >
         <video
           className={`preview-video rotate-${clip.rotationDegrees}`}
           src={clip.previewUrl}
           controls
+          draggable={false}
           preload="metadata"
         />
       </div>

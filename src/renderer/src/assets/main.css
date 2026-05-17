@@ -622,6 +622,11 @@ textarea:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   background: #05070a;
+  cursor: grab;
+}
+
+.preview-video-shell:active {
+  cursor: grabbing;
 }
 
 .preview-stage .preview-video {

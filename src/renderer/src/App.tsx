@@ -656,6 +656,7 @@ function App(): JSX.Element {
           onUpdateNote={handleUpdateNote}
           onReveal={handleReveal}
           onCopyPath={handleCopyPath}
+          onDragClip={handleDragClip}
           onRotate={handleUpdateRotation}
         />
 
