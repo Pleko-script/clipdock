@@ -95,6 +95,26 @@ function App(): JSX.Element {
     y: number
     items: ContextMenuItem[]
   } | null>(null)
+  const [dragReady, setDragReady] = useState<Map<string, 'pending' | 'ready' | 'failed'>>(
+    () => new Map()
+  )
+
+  const setClipDragReady = useCallback(
+    (clipId: string, state: 'pending' | 'ready' | 'failed' | null): void => {
+      setDragReady((previous) => {
+        const next = new Map(previous)
+
+        if (state === null) {
+          next.delete(clipId)
+        } else {
+          next.set(clipId, state)
+        }
+
+        return next
+      })
+    },
+    []
+  )
 
   const clips = useMemo(() => snapshot?.clips ?? [], [snapshot])
   const sources = useMemo(() => snapshot?.sources ?? [], [snapshot])
@@ -141,7 +161,59 @@ function App(): JSX.Element {
 
   const applySnapshot = useCallback((nextSnapshot: LibrarySnapshot): void => {
     setSnapshot(nextSnapshot)
+    setDragReady(new Map())
   }, [])
+
+  const ensureClipDragReady = useCallback(
+    async (clipId: string): Promise<'ready' | 'failed'> => {
+      const api = getClipdockApi()
+
+      if (!api) {
+        setClipDragReady(clipId, 'failed')
+        return 'failed'
+      }
+
+      setClipDragReady(clipId, 'pending')
+      const prepared = await api.prepareClipDrag({ clipIds: [clipId] })
+
+      if (prepared.ok) {
+        setClipDragReady(clipId, 'ready')
+        return 'ready'
+      }
+
+      setClipDragReady(clipId, 'failed')
+      setLastError(prepared.error)
+      setStatus(prepared.error.message)
+      return 'failed'
+    },
+    [setClipDragReady]
+  )
+
+  const maybePrepareDragReady = useCallback(
+    (clip: LibraryClipRecordSummary): void => {
+      if (clip.rotationDegrees === 0) return
+      if (dragReady.has(clip.id)) return
+
+      void ensureClipDragReady(clip.id)
+    },
+    [dragReady, ensureClipDragReady]
+  )
+
+  const handleSelectClip = useCallback(
+    (clip: LibraryClipRecordSummary, event: MouseEvent): void => {
+      selectClip(clip, event)
+      maybePrepareDragReady(clip)
+    },
+    [maybePrepareDragReady, selectClip]
+  )
+
+  const handleOpenClip = useCallback(
+    (clip: LibraryClipRecordSummary): void => {
+      openClip(clip)
+      maybePrepareDragReady(clip)
+    },
+    [maybePrepareDragReady, openClip]
+  )
 
   useEffect(() => {
     const api = getClipdockApi()
@@ -225,13 +297,19 @@ function App(): JSX.Element {
         event.error ?? { code: 'DRAG_FAILED', phase: 'drag', message: 'Native drag failed.' }
       )
       setStatus('Native drag failed.')
+
+      if (event.error?.code === 'CLIP_EXPORT_FAILED') {
+        for (const clipId of event.clipIds) {
+          setClipDragReady(clipId, 'failed')
+        }
+      }
     })
 
     return () => {
       unsubscribeScan()
       unsubscribeDrag()
     }
-  }, [])
+  }, [setClipDragReady])
 
   const runSnapshotAction = useCallback(
     async (
@@ -340,7 +418,33 @@ function App(): JSX.Element {
       }
 
       const selectedIds = selectedIdsForClip(clip, selectedClipIdsRef.current)
+      const blockingClips = selectedIds
+        .map((id) => clips.find((entry) => entry.id === id))
+        .filter((entry): entry is LibraryClipRecordSummary => Boolean(entry))
+        .filter((entry) => entry.rotationDegrees !== 0 && dragReady.get(entry.id) !== 'ready')
 
+      if (blockingClips.length > 0) {
+        event.preventDefault()
+
+        const needsPrepare = blockingClips.filter(
+          (entry) => (dragReady.get(entry.id) ?? null) !== 'pending'
+        )
+
+        for (const entry of needsPrepare) {
+          void ensureClipDragReady(entry.id)
+        }
+
+        setStatus(
+          needsPrepare.length > 0
+            ? 'Preparing rotated export... try dragging again when ready.'
+            : 'Rotated export still preparing. Try again in a moment.'
+        )
+        return
+      }
+
+      // Electron owns the native drag session from this point on. Letting Chromium
+      // start its HTML drag at the same time can terminate the process on Windows.
+      event.preventDefault()
       event.dataTransfer.setData('application/x-clipdock-clip-ids', JSON.stringify(selectedIds))
       setSelectedClipIds(new Set(selectedIds))
       setActiveClipId(clip.id)
@@ -349,7 +453,7 @@ function App(): JSX.Element {
       )
       api.startClipDrag({ clipIds: selectedIds })
     },
-    [selectedClipIdsRef, setActiveClipId, setSelectedClipIds]
+    [clips, dragReady, ensureClipDragReady, selectedClipIdsRef, setActiveClipId, setSelectedClipIds]
   )
 
   const handleToggleFavorite = useCallback(
@@ -402,6 +506,7 @@ function App(): JSX.Element {
       applySnapshot(rotation.value)
 
       if (rotationDegrees === 0) {
+        setClipDragReady(clip.id, null)
         setLastError(null)
         setStatus(`Loaded ${rotation.value.clips.length} clips.`)
         setBusy(false)
@@ -409,19 +514,16 @@ function App(): JSX.Element {
       }
 
       setStatus('Preparing rotated drag export for timeline drop...')
-      const prepared = await api.prepareClipDrag({ clipIds: [clip.id] })
+      const outcome = await ensureClipDragReady(clip.id)
 
-      if (prepared.ok) {
+      if (outcome === 'ready') {
         setLastError(null)
         setStatus('Rotated drag export ready.')
-      } else {
-        setLastError(prepared.error)
-        setStatus(prepared.error.message)
       }
 
       setBusy(false)
     },
-    [applySnapshot]
+    [applySnapshot, ensureClipDragReady, setClipDragReady]
   )
 
   const handleReveal = useCallback(async (clip: LibraryClipRecordSummary): Promise<void> => {
@@ -680,6 +782,7 @@ function App(): JSX.Element {
 
         <PreviewStage
           clip={activeClip}
+          dragReadyState={activeClip ? dragReady.get(activeClip.id) : undefined}
           onToggleFavorite={handleToggleFavorite}
           onUpdateTags={handleUpdateTags}
           onUpdateNote={handleUpdateNote}
@@ -699,8 +802,9 @@ function App(): JSX.Element {
           clips={filteredClips}
           activeClipId={activeClipId}
           selectedClipIds={selectedClipIds}
-          onSelectClip={selectClip}
-          onOpenClip={openClip}
+          dragReady={dragReady}
+          onSelectClip={handleSelectClip}
+          onOpenClip={handleOpenClip}
           onDragClip={handleDragClip}
           onOpenClipMenu={handleOpenClipMenu}
           onToggleFavorite={handleToggleFavorite}

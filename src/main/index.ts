@@ -150,6 +150,14 @@ function createWindow(): void {
     }
   })
 
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[clipdock] renderer process gone:', details)
+  })
+
+  mainWindow.on('unresponsive', () => {
+    console.error('[clipdock] main window became unresponsive')
+  })
+
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (rendererUrl) {
@@ -158,6 +166,14 @@ function createWindow(): void {
     mainWindow.loadFile(rendererIndexPath)
   }
 }
+
+process.on('uncaughtException', (error) => {
+  console.error('[clipdock] uncaughtException:', error)
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[clipdock] unhandledRejection:', reason)
+})
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.

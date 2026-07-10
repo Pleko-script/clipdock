@@ -1,5 +1,6 @@
 import type { DragEvent, JSX, MouseEvent } from 'react'
 import type { LibraryClipRecordSummary } from '../../../shared/clipdock'
+import type { ClipDragReadyState } from './PreviewStage'
 
 const EMPTY_STATUS = 'Add a folder to start building the local video library.'
 
@@ -26,6 +27,7 @@ function ClipCard({
   clip,
   selected,
   active,
+  dragReadyState,
   onSelect,
   onOpen,
   onDrag,
@@ -35,21 +37,35 @@ function ClipCard({
   clip: LibraryClipRecordSummary
   selected: boolean
   active: boolean
+  dragReadyState?: ClipDragReadyState
   onSelect: (event: MouseEvent) => void
   onOpen: () => void
   onDrag: (event: DragEvent<HTMLElement>) => void
   onOpenMenu: (event: MouseEvent) => void
   onToggleFavorite: () => void
 }): JSX.Element {
+  const requiresRotatedExport = clip.rotationDegrees !== 0
+  const isPreparing = requiresRotatedExport && dragReadyState === 'pending'
+  const isFailed = requiresRotatedExport && dragReadyState === 'failed'
+  const tooltip = isPreparing
+    ? 'Preparing rotated export...'
+    : isFailed
+      ? 'Rotated export failed. Click rotation again to retry.'
+      : clip.filePath
+  const cardClassName =
+    `clip-card${selected ? ' selected' : ''}${active ? ' active' : ''}` +
+    `${isPreparing ? ' preparing' : ''}${isFailed ? ' failed' : ''}`
+
   return (
     <article
-      className={`clip-card${selected ? ' selected' : ''}${active ? ' active' : ''}`}
-      draggable
+      className={cardClassName}
+      draggable={!isPreparing}
       onClick={onSelect}
       onDoubleClick={onOpen}
       onDragStart={onDrag}
       onContextMenu={onOpenMenu}
-      title={clip.filePath}
+      title={tooltip}
+      aria-busy={isPreparing}
     >
       <div className={`thumb rotate-${clip.rotationDegrees}`}>
         {clip.thumbnailUrl ? (
@@ -90,6 +106,7 @@ export function ClipGrid({
   clips,
   activeClipId,
   selectedClipIds,
+  dragReady,
   onSelectClip,
   onOpenClip,
   onDragClip,
@@ -99,6 +116,7 @@ export function ClipGrid({
   clips: LibraryClipRecordSummary[]
   activeClipId: string | null
   selectedClipIds: Set<string>
+  dragReady?: Map<string, ClipDragReadyState>
   onSelectClip: (clip: LibraryClipRecordSummary, event: MouseEvent) => void
   onOpenClip: (clip: LibraryClipRecordSummary) => void
   onDragClip: (clip: LibraryClipRecordSummary, event: DragEvent<HTMLElement>) => void
@@ -122,6 +140,7 @@ export function ClipGrid({
           clip={clip}
           selected={selectedClipIds.has(clip.id)}
           active={activeClipId === clip.id}
+          dragReadyState={dragReady?.get(clip.id)}
           onSelect={(event) => onSelectClip(clip, event)}
           onOpen={() => onOpenClip(clip)}
           onDrag={(event) => onDragClip(clip, event)}

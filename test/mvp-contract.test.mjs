@@ -149,7 +149,11 @@ test('main process owns dialogs, scanning, thumbnailing, reveal, clipboard, and 
   assert.match(ipc, /exportCacheDir/)
   assert.match(ipc, /PREPARE_CLIP_DRAG_CHANNEL/)
   assert.match(ipc, /START_CLIP_DRAG_CHANNEL/)
-  assert.match(ipc, /renderIfMissing:\s*false/)
+  assert.match(ipc, /resolvePreparedDragFile/)
+  assert.match(ipc, /statSync/)
+  assert.match(ipc, /function startClipDrag\(/)
+  assert.doesNotMatch(ipc, /async function startClipDrag\(/)
+  assert.match(app, /event\.preventDefault\(\)\s*event\.dataTransfer[\s\S]*api\.startClipDrag/)
 })
 
 test('preload exposes only the typed clipdock bridge and no raw node/electron API', () => {

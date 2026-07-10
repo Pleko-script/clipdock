@@ -113,8 +113,22 @@ function NoteEditor({
   )
 }
 
+export type ClipDragReadyState = 'pending' | 'ready' | 'failed'
+
+function dragShellTooltip(
+  clip: LibraryClipRecordSummary,
+  dragReadyState: ClipDragReadyState | undefined
+): string {
+  if (clip.rotationDegrees === 0) return 'Drag preview to timeline'
+  if (dragReadyState === 'pending') return 'Preparing rotated export...'
+  if (dragReadyState === 'failed') return 'Rotated export failed. Click rotation again to retry.'
+
+  return 'Drag preview to timeline'
+}
+
 export function PreviewStage({
   clip,
+  dragReadyState,
   onToggleFavorite,
   onUpdateTags,
   onUpdateNote,
@@ -124,6 +138,7 @@ export function PreviewStage({
   onRotate
 }: {
   clip: LibraryClipRecordSummary | null
+  dragReadyState?: ClipDragReadyState
   onToggleFavorite: (clip: LibraryClipRecordSummary) => void
   onUpdateTags: (clip: LibraryClipRecordSummary, tags: string[]) => void
   onUpdateNote: (clip: LibraryClipRecordSummary, note: string) => void
@@ -141,13 +156,20 @@ export function PreviewStage({
     )
   }
 
+  const requiresRotatedExport = clip.rotationDegrees !== 0
+  const isPreparing = requiresRotatedExport && dragReadyState === 'pending'
+  const isFailed = requiresRotatedExport && dragReadyState === 'failed'
+  const draggableEnabled = !isPreparing
+  const shellClassName = `preview-video-shell${isPreparing ? ' preparing' : ''}${isFailed ? ' failed' : ''}`
+
   return (
     <section className="preview-stage">
       <div
-        className="preview-video-shell"
-        draggable
+        className={shellClassName}
+        draggable={draggableEnabled}
         onDragStart={(event) => onDragClip(clip, event)}
-        title="Drag preview to timeline"
+        title={dragShellTooltip(clip, dragReadyState)}
+        aria-busy={isPreparing}
       >
         <video
           className={`preview-video rotate-${clip.rotationDegrees}`}
@@ -178,11 +200,14 @@ export function PreviewStage({
               type="button"
               key={degrees}
               className={clip.rotationDegrees === degrees ? 'active' : ''}
+              disabled={isPreparing && clip.rotationDegrees !== degrees}
               onClick={() => onRotate(clip, degrees as ClipRotationDegrees)}
             >
               {degrees}°
             </button>
           ))}
+          {isPreparing ? <span className="rotation-status">Preparing export...</span> : null}
+          {isFailed ? <span className="rotation-status failed">Export failed</span> : null}
         </div>
 
         <dl className="metadata-strip">

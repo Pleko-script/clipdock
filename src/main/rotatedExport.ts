@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { stat, mkdir, rename, rm } from 'node:fs/promises'
+import { open, stat, mkdir, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import ffmpegPath from 'ffmpeg-static'
@@ -51,13 +51,39 @@ function temporaryExportPath(outputPath: string): string {
   return join(dirname(outputPath), `${basename(outputPath)}.${process.pid}.${Date.now()}.tmp.mp4`)
 }
 
-async function fileExists(path: string): Promise<boolean> {
+async function fileHasContent(path: string): Promise<boolean> {
   try {
     const stats = await stat(path)
 
-    return stats.isFile()
+    return stats.isFile() && stats.size > 0
   } catch {
     return false
+  }
+}
+
+async function fileLooksLikeMp4(filePath: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+
+  try {
+    handle = await open(filePath, 'r')
+    const buffer = Buffer.alloc(12)
+    const { bytesRead } = await handle.read(buffer, 0, 12, 0)
+
+    if (bytesRead < 12) {
+      return false
+    }
+
+    return buffer.subarray(4, 8).toString('ascii') === 'ftyp'
+  } catch {
+    return false
+  } finally {
+    if (handle) {
+      try {
+        await handle.close()
+      } catch {
+        // Handle close failure is non-fatal.
+      }
+    }
   }
 }
 
@@ -224,10 +250,8 @@ export async function resolveRotatedExportPath(
     return cached
   }
 
-  if (cached.value && (await fileExists(cached.value.exportPath))) {
-    const cachedValidation = await validatePlayableVideo(cached.value.exportPath)
-
-    if (cachedValidation.ok) {
+  if (cached.value && (await fileHasContent(cached.value.exportPath))) {
+    if (await fileLooksLikeMp4(cached.value.exportPath)) {
       return ok(cached.value.exportPath)
     }
 

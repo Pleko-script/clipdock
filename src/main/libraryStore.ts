@@ -152,6 +152,7 @@ export interface LibraryStore {
     input: UpsertClipExportInput
   ) => LibraryResult<LibraryClipExportRecordSummary>
   getClipDragAsset: (clipId: string) => LibraryResult<ClipDragAsset>
+  listClipsWithRotation: () => LibraryResult<ClipDragAsset[]>
   getClipAsset: (clipId: string, kind: 'media' | 'thumbnail') => LibraryResult<string>
   close: () => LibraryResult<void>
 }
@@ -1841,6 +1842,46 @@ class SqliteLibraryStore implements LibraryStore {
       modifiedAtMs: row.modified_at_ms,
       rotationDegrees: row.rotation_degrees
     })
+  }
+
+  listClipsWithRotation(): LibraryResult<ClipDragAsset[]> {
+    const openResult = this.requireOpen('drag')
+
+    if (!openResult.ok) {
+      return openResult
+    }
+
+    try {
+      const rows = this.database
+        .prepare(
+          "SELECT * FROM clips WHERE status != 'removed' AND rotation_degrees != 0 ORDER BY updated_at_ms DESC"
+        )
+        .all() as unknown as ClipRow[]
+
+      const assets: ClipDragAsset[] = []
+
+      for (const row of rows) {
+        const filePath = actualClipPath(row)
+
+        if (!filePath) continue
+
+        assets.push({
+          id: row.id,
+          filePath,
+          sizeBytes: row.size_bytes,
+          modifiedAtMs: row.modified_at_ms,
+          rotationDegrees: row.rotation_degrees
+        })
+      }
+
+      return ok(assets)
+    } catch (error) {
+      return fail(
+        'LIBRARY_SNAPSHOT_FAILED',
+        'drag',
+        error instanceof Error ? error.message : 'Failed to list clips with rotation.'
+      )
+    }
   }
 
   getClipAsset(clipId: string, kind: 'media' | 'thumbnail'): LibraryResult<string> {

@@ -724,6 +724,67 @@ textarea:focus-visible {
   background: rgba(125, 211, 252, 0.16);
 }
 
+.rotation-controls button:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.rotation-status {
+  align-self: center;
+  padding: 0 6px;
+  color: rgba(125, 211, 252, 0.84);
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rotation-status.failed {
+  color: #fecdd3;
+}
+
+.preview-video-shell.preparing,
+.clip-card.preparing {
+  position: relative;
+  cursor: progress;
+}
+
+.preview-video-shell.preparing::after,
+.clip-card.preparing::after {
+  content: 'Preparing rotated export...';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(5, 7, 10, 0.62);
+  color: rgba(125, 211, 252, 0.92);
+  font-size: 0.74rem;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  animation: clipdock-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.preview-video-shell.failed,
+.clip-card.failed {
+  outline: 1px solid rgba(254, 205, 211, 0.5);
+}
+
+@keyframes clipdock-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .metadata-strip {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

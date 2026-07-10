@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { constants, statSync, type Stats } from 'node:fs'
 import { access, copyFile, mkdir, rm, stat } from 'node:fs/promises'
-import { basename, extname, join, parse } from 'node:path'
+import { basename, extname, join, normalize, parse } from 'node:path'
 import {
   app,
   clipboard,
@@ -893,6 +893,31 @@ async function resolveDragFile(
   )
 }
 
+async function warmUpRotatedExports(runtime: LibraryRuntime): Promise<void> {
+  const listed = runtime.store.listClipsWithRotation()
+
+  if (!listed.ok || listed.value.length === 0) return
+
+  for (const asset of listed.value) {
+    if (asset.rotationDegrees === 0) continue
+
+    try {
+      await resolveRotatedExportPath({
+        store: runtime.store,
+        clipId: asset.id,
+        sourcePath: asset.filePath,
+        sourceSizeBytes: asset.sizeBytes,
+        sourceModifiedAtMs: asset.modifiedAtMs,
+        rotationDegrees: asset.rotationDegrees,
+        exportCacheDir: runtime.storage.exportCacheDir,
+        renderIfMissing: true
+      })
+    } catch {
+      // Warm-up failures stay silent; the next interactive prepare/drag surfaces a fresh error.
+    }
+  }
+}
+
 async function prepareClipDrag(
   ensureRuntime: () => LibraryResult<LibraryRuntime>,
   request: ClipDragRequest
@@ -921,17 +946,119 @@ async function prepareClipDrag(
   return ok(undefined)
 }
 
-function createDragIcon(): Electron.NativeImage {
-  const image = nativeImage.createFromPath(icon)
+function resolvePreparedDragFile(runtime: LibraryRuntime, clipId: string): ClipdockResult<string> {
+  const asset = runtime.store.getClipDragAsset(clipId)
 
-  return image.isEmpty() ? nativeImage.createEmpty() : image
+  if (!asset.ok) {
+    return fromLibraryResult(asset)
+  }
+
+  if (!getSupportedExtension(asset.value.filePath)) {
+    return fail('UNSUPPORTED_EXTENSION', 'ClipDock can drag supported video files only.', {
+      phase: 'drag',
+      sourcePath: asset.value.filePath
+    })
+  }
+
+  try {
+    if (!statSync(asset.value.filePath).isFile()) {
+      return fail('NOT_A_FILE', 'The selected clip path is not a file.', {
+        phase: 'drag',
+        sourcePath: asset.value.filePath
+      })
+    }
+  } catch {
+    return fail('MISSING_FILE', 'The selected clip file is no longer available.', {
+      phase: 'drag',
+      sourcePath: asset.value.filePath
+    })
+  }
+
+  if (asset.value.rotationDegrees === 0) {
+    return ok(asset.value.filePath)
+  }
+
+  const cached = runtime.store.getClipRotationExport({
+    clipId: asset.value.id,
+    rotationDegrees: asset.value.rotationDegrees,
+    sourceSizeBytes: asset.value.sizeBytes,
+    sourceModifiedAtMs: asset.value.modifiedAtMs
+  })
+
+  if (!cached.ok) {
+    return fromLibraryResult(cached)
+  }
+
+  if (!cached.value) {
+    return fail(
+      'CLIP_EXPORT_FAILED',
+      'Rotated export is not ready yet. Wait for ClipDock to finish preparing it.',
+      { phase: 'export' }
+    )
+  }
+
+  try {
+    const stats = statSync(cached.value.exportPath)
+
+    if (!stats.isFile() || stats.size === 0) {
+      return fail('CLIP_EXPORT_FAILED', 'The prepared rotated export is invalid.', {
+        phase: 'export',
+        sourcePath: cached.value.exportPath
+      })
+    }
+  } catch {
+    return fail('CLIP_EXPORT_FAILED', 'The prepared rotated export is missing.', {
+      phase: 'export',
+      sourcePath: cached.value.exportPath
+    })
+  }
+
+  return ok(cached.value.exportPath)
 }
 
-async function startClipDrag(
+const FALLBACK_DRAG_ICON_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAQAAAC1+jfqAAAAHUlEQVR42mNk+M9Qz0AEYBxVOKpwVOGowlGFFFcIAFkABEYJpZJpAAAAAElFTkSuQmCC'
+
+function createDragIcon(): Electron.NativeImage {
+  try {
+    const fromPath = nativeImage.createFromPath(icon)
+
+    if (!fromPath.isEmpty()) {
+      const resized = fromPath.resize({ width: 32, height: 32 })
+
+      if (!resized.isEmpty()) {
+        return resized
+      }
+
+      return fromPath
+    }
+  } catch {
+    // Fall through to the embedded fallback icon.
+  }
+
+  const fallback = nativeImage.createFromDataURL(FALLBACK_DRAG_ICON_DATA_URL)
+
+  if (!fallback.isEmpty()) {
+    return fallback
+  }
+
+  const empty = nativeImage.createEmpty()
+
+  empty.addRepresentation({
+    width: 1,
+    height: 1,
+    buffer: Buffer.from([0, 0, 0, 0]),
+    scaleFactor: 1
+  })
+
+  return empty
+}
+
+function startClipDrag(
   event: IpcMainEvent,
   ensureRuntime: () => LibraryResult<LibraryRuntime>,
   request: ClipDragRequest
-): Promise<void> {
+): void {
   const runtimeResult = ensureRuntime()
   const clipIds = Array.isArray(request?.clipIds)
     ? request.clipIds.filter(Boolean).slice(0, 32)
@@ -958,9 +1085,7 @@ async function startClipDrag(
   const files: string[] = []
 
   for (const clipId of clipIds) {
-    const validation = await resolveDragFile(runtimeResult.value, clipId, {
-      renderIfMissing: false
-    })
+    const validation = resolvePreparedDragFile(runtimeResult.value, clipId)
 
     if (!validation.ok) {
       event.sender.send(CLIP_DRAG_EVENT_CHANNEL, {
@@ -975,21 +1100,56 @@ async function startClipDrag(
   }
 
   try {
-    const dragItem =
-      files.length === 1
-        ? { file: files[0], icon: createDragIcon() }
-        : ({ files, icon: createDragIcon() } as unknown as Parameters<WebContents['startDrag']>[0])
+    const normalizedFiles = files.map((filePath) => normalize(filePath))
 
-    event.sender.startDrag(dragItem)
-    event.sender.send(CLIP_DRAG_EVENT_CHANNEL, { type: 'drag-started', clipIds })
-  } catch {
+    const dragIcon = createDragIcon()
+
+    console.log(
+      '[clipdock] startDrag invoked with',
+      normalizedFiles.length,
+      'file(s):',
+      normalizedFiles,
+      'iconSize:',
+      dragIcon.getSize(),
+      'iconEmpty:',
+      dragIcon.isEmpty()
+    )
+
+    const dragItem: Parameters<WebContents['startDrag']>[0] = {
+      file: normalizedFiles[0],
+      icon: dragIcon
+    }
+
+    if (normalizedFiles.length > 1) {
+      ;(dragItem as { files?: string[] }).files = normalizedFiles
+    }
+
+    try {
+      event.sender.startDrag(dragItem)
+      event.sender.send(CLIP_DRAG_EVENT_CHANNEL, { type: 'drag-started', clipIds })
+    } catch (innerError) {
+      const message = innerError instanceof Error ? innerError.message : 'unknown error'
+      console.error('[clipdock] startDrag native call failed:', innerError)
+      event.sender.send(CLIP_DRAG_EVENT_CHANNEL, {
+        type: 'drag-failed',
+        clipIds,
+        error: {
+          code: 'DRAG_FAILED',
+          phase: 'drag',
+          message: `The native file drag could not be started: ${message}`
+        }
+      })
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error'
+    console.error('[clipdock] startDrag failed:', error)
     event.sender.send(CLIP_DRAG_EVENT_CHANNEL, {
       type: 'drag-failed',
       clipIds,
       error: {
         code: 'DRAG_FAILED',
         phase: 'drag',
-        message: 'The native file drag could not be started.'
+        message: `The native file drag could not be started: ${message}`
       }
     })
   }
@@ -1036,6 +1196,12 @@ export function registerLibraryIpc(
       store: storeResult.value,
       storage: storageResult.value
     }
+
+    const initializedRuntime = runtime
+
+    setImmediate(() => {
+      void warmUpRotatedExports(initializedRuntime)
+    })
 
     return libraryOk(runtime)
   }
@@ -1252,17 +1418,7 @@ export function registerLibraryIpc(
   resolvedDependencies.ipcMain.on(
     START_CLIP_DRAG_CHANNEL,
     (event: IpcMainEvent, request: ClipDragRequest) => {
-      void startClipDrag(event, ensureRuntime, request).catch(() => {
-        event.sender.send(CLIP_DRAG_EVENT_CHANNEL, {
-          type: 'drag-failed',
-          clipIds: request?.clipIds ?? [],
-          error: {
-            code: 'DRAG_FAILED',
-            phase: 'drag',
-            message: 'The native file drag could not be started.'
-          }
-        })
-      })
+      startClipDrag(event, ensureRuntime, request)
     }
   )
 
