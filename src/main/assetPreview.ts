@@ -1,18 +1,26 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { access, mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { AssetSummary } from '../shared/clipdock'
-import { writePlaceholderThumbnail } from './thumbnailer'
 
 const requireFromMain = createRequire(__filename)
 const ffmpegPath = requireFromMain('ffmpeg-static') as string | null
-const PREVIEW_PIPELINE_VERSION = 2
+const PREVIEW_PIPELINE_VERSION = 3
 
 export interface AssetPreviewResult {
   thumbnailPath: string
   previewPath: string | null
+}
+
+async function writePlaceholderThumbnail(filePath: string, label: string): Promise<string> {
+  const path = filePath.replace(/\.jpg$/i, '.svg')
+  const safeLabel = label.replace(/[<>&"]/g, '-').slice(0, 72)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#15191f"/><path d="M40 180h560" stroke="#2a313b" stroke-width="2"/><text x="320" y="195" text-anchor="middle" fill="#8f9aa8" font-family="sans-serif" font-size="22">${safeLabel}</text></svg>`
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, svg, 'utf8')
+  return path
 }
 
 async function runFfmpeg(args: string[], timeoutMs = 60_000): Promise<void> {
@@ -64,7 +72,10 @@ function encodeArgs(outputPath: string): string[] {
 }
 
 async function renderVideoPreview(asset: AssetSummary, outputPath: string): Promise<void> {
-  const scale = `scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2`
+  const fitOpaque =
+    'scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2'
+  const fitAlpha =
+    'scale=640:360:force_original_aspect_ratio=decrease,format=rgba,pad=640:360:(ow-iw)/2:(oh-ih)/2:color=black@0'
   if (asset.kind === 'transition') {
     await runFfmpeg([
       '-y',
@@ -79,7 +90,7 @@ async function renderVideoPreview(asset: AssetSummary, outputPath: string): Prom
       '-i',
       'color=c=0x70452f:s=640x360:r=30:d=0.75',
       '-filter_complex',
-      `[1:v]drawgrid=w=80:h=80:t=2:c=0x55c2ff@0.35,format=yuv420p[a];[0:v]trim=duration=2.5,setpts=PTS-STARTPTS,${scale},fps=30,format=yuv420p[fx];[2:v]drawgrid=w=80:h=80:t=2:c=0xf6c85f@0.35,format=yuv420p[b];[a][fx][b]concat=n=3:v=1:a=0[out]`,
+      `[1:v]drawgrid=w=80:h=80:t=2:c=0x55c2ff@0.35,format=yuv420p[a];[0:v]trim=duration=2.5,setpts=PTS-STARTPTS,${fitOpaque},fps=30,format=yuv420p[fx];[2:v]drawgrid=w=80:h=80:t=2:c=0xf6c85f@0.35,format=yuv420p[b];[a][fx][b]concat=n=3:v=1:a=0[out]`,
       ...encodeArgs(outputPath)
     ])
     return
@@ -91,8 +102,8 @@ async function renderVideoPreview(asset: AssetSummary, outputPath: string): Prom
   ) {
     const combine =
       asset.overlayMode === 'screen'
-        ? `[1:v]format=yuv420p[bg];[0:v]trim=duration=4,setpts=PTS-STARTPTS,${scale},fps=30,format=yuv420p[fg];[bg][fg]blend=all_mode=screen[out]`
-        : `[1:v]format=yuv420p[bg];[0:v]trim=duration=4,setpts=PTS-STARTPTS,${scale},fps=30[fg];[bg][fg]overlay=shortest=1,format=yuv420p[out]`
+        ? `[1:v]format=yuv420p[bg];[0:v]trim=duration=4,setpts=PTS-STARTPTS,${fitOpaque},fps=30,format=yuv420p[fg];[bg][fg]blend=all_mode=screen[out]`
+        : `[1:v]format=yuv420p[bg];[0:v]trim=duration=4,setpts=PTS-STARTPTS,${fitAlpha},fps=30[fg];[bg][fg]overlay=shortest=1,format=yuv420p[out]`
     await runFfmpeg([
       '-y',
       '-i',
@@ -113,7 +124,7 @@ async function renderVideoPreview(asset: AssetSummary, outputPath: string): Prom
     '-i',
     asset.filePath,
     '-filter_complex',
-    `[0:v]trim=duration=4,setpts=PTS-STARTPTS,${scale},fps=30,format=yuv420p[out]`,
+    `[0:v]trim=duration=4,setpts=PTS-STARTPTS,${fitOpaque},fps=30,format=yuv420p[out]`,
     ...encodeArgs(outputPath)
   ])
 }

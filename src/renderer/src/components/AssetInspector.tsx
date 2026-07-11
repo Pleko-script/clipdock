@@ -34,10 +34,12 @@ export function AssetInspector({
   const primary = assets[0]
   const [tags, setTags] = useState(primary?.tags.join(', ') ?? '')
   const [note, setNote] = useState(primary?.note ?? '')
+  const [tagsDirty, setTagsDirty] = useState(false)
+  const [noteDirty, setNoteDirty] = useState(false)
   if (!primary)
     return (
       <aside className="asset-inspector empty">
-        <button type="button" onClick={onClose}>
+        <button type="button" onClick={onClose} aria-label="Close inspector">
           <X size={17} />
         </button>
         <strong>Inspector</strong>
@@ -76,7 +78,7 @@ export function AssetInspector({
           <option value="unknown">Unknown</option>
         </select>
       </label>
-      {assets.every((asset) => asset.mediaType === 'video') ? (
+      {assets.every((asset) => asset.kind === 'overlay') ? (
         <label>
           Overlay mode
           <select
@@ -101,8 +103,13 @@ export function AssetInspector({
         Tags
         <input
           value={tags}
-          onChange={(event) => setTags(event.target.value)}
-          onBlur={() =>
+          onChange={(event) => {
+            setTags(event.target.value)
+            setTagsDirty(true)
+          }}
+          onBlur={() => {
+            if (!tagsDirty) return
+            setTagsDirty(false)
             onUpdate({
               assetIds: ids,
               tags: tags
@@ -110,7 +117,7 @@ export function AssetInspector({
                 .map((tag) => tag.trim())
                 .filter(Boolean)
             })
-          }
+          }}
           placeholder="glitch, fast, warm"
         />
       </label>
@@ -119,8 +126,15 @@ export function AssetInspector({
           Notes
           <textarea
             value={note}
-            onChange={(event) => setNote(event.target.value)}
-            onBlur={() => onUpdate({ assetIds: ids, note })}
+            onChange={(event) => {
+              setNote(event.target.value)
+              setNoteDirty(true)
+            }}
+            onBlur={() => {
+              if (!noteDirty) return
+              setNoteDirty(false)
+              onUpdate({ assetIds: ids, note })
+            }}
             placeholder="Usage notes"
           />
         </label>

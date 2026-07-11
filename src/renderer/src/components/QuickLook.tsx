@@ -15,17 +15,28 @@ export function QuickLook({
   const source = original || !asset.previewUrl ? asset.mediaUrl : asset.previewUrl
   return (
     <div className="quick-look-backdrop" onMouseDown={onClose}>
-      <section className="quick-look" onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="quick-look"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Quick Look: ${asset.displayName}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>
           <div>
             <span>{asset.packName}</span>
             <strong>{asset.displayName}</strong>
           </div>
           <div>
-            <button type="button" className={asset.favorite ? 'active' : ''} onClick={onFavorite}>
+            <button
+              type="button"
+              className={asset.favorite ? 'active' : ''}
+              onClick={onFavorite}
+              aria-label={asset.favorite ? 'Remove favorite' : 'Add favorite'}
+            >
               <Heart size={17} fill={asset.favorite ? 'currentColor' : 'none'} />
             </button>
-            <button type="button" onClick={onClose}>
+            <button type="button" onClick={onClose} aria-label="Close Quick Look">
               <X size={19} />
             </button>
           </div>

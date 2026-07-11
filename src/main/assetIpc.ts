@@ -1,55 +1,25 @@
 import { statSync } from 'node:fs'
-import { rm, stat } from 'node:fs/promises'
-import { join, normalize, resolve, sep } from 'node:path'
+import { rm } from 'node:fs/promises'
+import { extname, join, normalize, resolve, sep } from 'node:path'
 import { app, dialog, ipcMain, shell, type IpcMainEvent, type WebContents } from 'electron'
-import type {
-  AssetDragRequest,
-  AssetJobEvent,
-  AssetQuery,
-  AssetScanResult,
-  AssetUpdateRequest,
-  ClipdockResult,
-  LibraryResult
-} from '../shared/clipdock'
+import { SUPPORTED_AUDIO_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS } from '../shared/clipdock'
+import { assetInvokeChannels, assetIpcChannels as channels } from '../shared/ipcChannels'
+import type { AssetJobEvent, AssetScanResult, ClipdockResult } from '../shared/clipdock'
 import icon from '../../resources/icon.png?asset'
 import { generateAssetPreview } from './assetPreview'
+import {
+  parseAssetDragRequest,
+  parseAssetQuery,
+  parseAssetUpdate,
+  validAssetId,
+  validAssetIds,
+  validLabel
+} from './assetIpcValidation'
 import { scanAssetPack } from './assetScanner'
 import { openAssetStore, type AssetStore } from './assetStore'
 
-const GET_ASSET_NAVIGATION_CHANNEL = 'clipdock:assets:get-navigation'
-const QUERY_ASSETS_CHANNEL = 'clipdock:assets:query'
-const ADD_PACK_FOLDER_CHANNEL = 'clipdock:assets:add-pack'
-const RELINK_PACK_CHANNEL = 'clipdock:assets:relink-pack'
-const RESCAN_PACKS_CHANNEL = 'clipdock:assets:rescan-packs'
-const UPDATE_ASSETS_CHANNEL = 'clipdock:assets:update'
-const TOGGLE_ASSET_FAVORITE_CHANNEL = 'clipdock:assets:toggle-favorite'
-const CREATE_COLLECTION_CHANNEL = 'clipdock:assets:create-collection'
-const RENAME_COLLECTION_CHANNEL = 'clipdock:assets:rename-collection'
-const DELETE_COLLECTION_CHANNEL = 'clipdock:assets:delete-collection'
-const ADD_ASSETS_TO_COLLECTION_CHANNEL = 'clipdock:assets:add-to-collection'
-const REVEAL_ASSET_CHANNEL = 'clipdock:assets:reveal'
-const REGENERATE_PREVIEWS_CHANNEL = 'clipdock:assets:regenerate-previews'
-const PREPARE_ASSET_DRAG_CHANNEL = 'clipdock:assets:prepare-drag'
-const START_ASSET_DRAG_CHANNEL = 'clipdock:assets:start-drag'
-const ASSET_JOB_EVENT_CHANNEL = 'clipdock:assets:job-event'
-const ASSET_DRAG_EVENT_CHANNEL = 'clipdock:assets:drag-event'
-
-const INVOKE_CHANNELS = [
-  GET_ASSET_NAVIGATION_CHANNEL,
-  QUERY_ASSETS_CHANNEL,
-  ADD_PACK_FOLDER_CHANNEL,
-  RELINK_PACK_CHANNEL,
-  RESCAN_PACKS_CHANNEL,
-  UPDATE_ASSETS_CHANNEL,
-  TOGGLE_ASSET_FAVORITE_CHANNEL,
-  CREATE_COLLECTION_CHANNEL,
-  RENAME_COLLECTION_CHANNEL,
-  DELETE_COLLECTION_CHANNEL,
-  ADD_ASSETS_TO_COLLECTION_CHANNEL,
-  REVEAL_ASSET_CHANNEL,
-  REGENERATE_PREVIEWS_CHANNEL,
-  PREPARE_ASSET_DRAG_CHANNEL
-] as const
+const VIDEO_EXTENSIONS = new Set<string>(SUPPORTED_VIDEO_EXTENSIONS)
+const AUDIO_EXTENSIONS = new Set<string>(SUPPORTED_AUDIO_EXTENSIONS)
 
 interface AssetRuntime {
   store: AssetStore
@@ -61,7 +31,7 @@ export interface AssetIpcRegistration {
   resolveAssetPath: (
     assetId: string,
     kind: 'media' | 'thumbnail' | 'preview'
-  ) => LibraryResult<string>
+  ) => ClipdockResult<string>
 }
 
 function ok<T>(value: T): ClipdockResult<T> {
@@ -78,16 +48,6 @@ function fail<T>(
   }
 }
 
-function validIds(value: unknown, limit = 256): string[] {
-  return Array.isArray(value)
-    ? [
-        ...new Set(
-          value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-        )
-      ].slice(0, limit)
-    : []
-}
-
 export function registerAssetIpc(): AssetIpcRegistration {
   const root = join(app.getPath('userData'), 'clipdock-library')
   const opened = openAssetStore({
@@ -101,8 +61,9 @@ export function registerAssetIpc(): AssetIpcRegistration {
   }
   let disposed = false
   let workerRunning = false
+  let scanRunning = false
   const send = (sender: WebContents | null, event: AssetJobEvent): void => {
-    if (sender && !sender.isDestroyed()) sender.send(ASSET_JOB_EVENT_CHANNEL, event)
+    if (sender && !sender.isDestroyed()) sender.send(channels.jobEvent, event)
   }
 
   const removeStalePreview = async (
@@ -131,7 +92,15 @@ export function registerAssetIpc(): AssetIpcRegistration {
         await Promise.all(
           claimed.value.map(async (job, index) => {
             const asset = runtime.store.getAsset(job.assetId)
-            if (!asset.ok) return
+            if (!asset.ok) {
+              runtime.store.failPreview(job.assetId, asset.error.message)
+              send(sender, {
+                type: 'preview-failed',
+                assetId: job.assetId,
+                message: asset.error.message
+              })
+              return
+            }
             try {
               const previousThumbnail = runtime.store.resolveAssetPath(job.assetId, 'thumbnail')
               const previousPreview = runtime.store.resolveAssetPath(job.assetId, 'preview')
@@ -166,7 +135,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
     }
   }
 
-  const scanPacks = async (
+  const scanPacksUnlocked = async (
     packIds: string[],
     sender: WebContents
   ): Promise<ClipdockResult<AssetScanResult[]>> => {
@@ -174,36 +143,58 @@ export function registerAssetIpc(): AssetIpcRegistration {
     if (!listed.ok) return listed
     const results: AssetScanResult[] = []
     for (const pack of listed.value) {
-      try {
-        results.push(await scanAssetPack(runtime.store, pack, (event) => send(sender, event)))
-      } catch (error) {
-        return fail(error instanceof Error ? error.message : 'Pack scan failed.', 'scan')
-      }
+      results.push(await scanAssetPack(runtime.store, pack, (event) => send(sender, event)))
     }
     void pumpPreviews(sender)
     return ok(results)
   }
 
-  for (const channel of INVOKE_CHANNELS) ipcMain.removeHandler(channel)
-  ipcMain.removeAllListeners(START_ASSET_DRAG_CHANNEL)
+  const withScanLock = async <T>(
+    operation: () => Promise<ClipdockResult<T>>
+  ): Promise<ClipdockResult<T>> => {
+    if (scanRunning) return fail('A pack scan is already running.', 'scan')
+    scanRunning = true
+    try {
+      return await operation()
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : 'Pack scan failed.', 'scan')
+    } finally {
+      scanRunning = false
+    }
+  }
 
-  ipcMain.handle(GET_ASSET_NAVIGATION_CHANNEL, () => runtime.store.navigation())
-  ipcMain.handle(QUERY_ASSETS_CHANNEL, (_event, query: AssetQuery) =>
-    runtime.store.queryAssets(query ?? {})
+  const firstScanResult = (
+    scanned: ClipdockResult<AssetScanResult[]>,
+    emptyMessage: string
+  ): ClipdockResult<AssetScanResult> => {
+    if (!scanned.ok) return fail(scanned.error.message, 'scan')
+    return scanned.value[0] ? ok(scanned.value[0]) : fail(emptyMessage, 'scan')
+  }
+
+  for (const channel of assetInvokeChannels) ipcMain.removeHandler(channel)
+  ipcMain.removeAllListeners(channels.startDrag)
+
+  ipcMain.handle(channels.navigation, () => runtime.store.navigation())
+  ipcMain.handle(channels.query, (_event, query: unknown) =>
+    runtime.store.queryAssets(parseAssetQuery(query))
   )
-  ipcMain.handle(ADD_PACK_FOLDER_CHANNEL, async (event) => {
+  ipcMain.handle(channels.addPack, async (event) => {
     const selected = await dialog.showOpenDialog({
       properties: ['openDirectory'],
       title: 'Add effect pack'
     })
     if (selected.canceled || !selected.filePaths[0])
       return fail<AssetScanResult>('Pack selection was cancelled.', 'scan')
-    const created = runtime.store.createPack(selected.filePaths[0])
-    if (!created.ok) return created
-    const scanned = await scanPacks([created.value], event.sender)
-    return scanned.ok && scanned.value[0] ? ok(scanned.value[0]) : scanned
+    return withScanLock(async () => {
+      const created = runtime.store.createPack(selected.filePaths[0])
+      if (!created.ok) return fail(created.error.message, 'scan')
+      const scanned = await scanPacksUnlocked([created.value], event.sender)
+      return firstScanResult(scanned, 'Pack scan returned no result.')
+    })
   })
-  ipcMain.handle(RELINK_PACK_CHANNEL, async (event, packId: string) => {
+  ipcMain.handle(channels.relinkPack, async (event, rawPackId: unknown) => {
+    const packId = validAssetId(rawPackId)
+    if (!packId) return fail<AssetScanResult>('Asset pack was not found.', 'scan')
     const packs = runtime.store.listPacks([packId])
     if (!packs.ok || !packs.value[0])
       return packs.ok ? fail<AssetScanResult>('Asset pack was not found.', 'scan') : packs
@@ -213,74 +204,59 @@ export function registerAssetIpc(): AssetIpcRegistration {
     })
     if (selected.canceled || !selected.filePaths[0])
       return fail<AssetScanResult>('Pack relink was cancelled.', 'scan')
-    const relinked = runtime.store.relinkPack(packId, selected.filePaths[0])
-    if (!relinked.ok) return relinked
-    const scanned = await scanPacks([packId], event.sender)
-    return scanned.ok && scanned.value[0]
-      ? ok(scanned.value[0])
-      : fail<AssetScanResult>(
-          scanned.ok ? 'Relink scan returned no result.' : scanned.error.message,
-          'scan'
-        )
-  })
-  ipcMain.handle(RESCAN_PACKS_CHANNEL, (event, packIds: unknown) =>
-    scanPacks(validIds(packIds), event.sender)
-  )
-  ipcMain.handle(UPDATE_ASSETS_CHANNEL, (_event, request: AssetUpdateRequest) =>
-    runtime.store.updateAssets({
-      ...request,
-      assetIds: validIds(request?.assetIds)
+    return withScanLock(async () => {
+      const relinked = runtime.store.relinkPack(packId, selected.filePaths[0])
+      if (!relinked.ok) return fail(relinked.error.message, 'scan')
+      const scanned = await scanPacksUnlocked([packId], event.sender)
+      return firstScanResult(scanned, 'Relink scan returned no result.')
     })
+  })
+  ipcMain.handle(channels.rescanPacks, (event, packIds: unknown) =>
+    withScanLock(() => scanPacksUnlocked(validAssetIds(packIds), event.sender))
   )
-  ipcMain.handle(TOGGLE_ASSET_FAVORITE_CHANNEL, (_event, assetId: string) =>
-    runtime.store.toggleFavorite(assetId)
+  ipcMain.handle(channels.updateAssets, (_event, request: unknown) =>
+    runtime.store.updateAssets(parseAssetUpdate(request))
   )
-  ipcMain.handle(CREATE_COLLECTION_CHANNEL, (_event, name: string) =>
-    runtime.store.createCollection(typeof name === 'string' ? name : '')
+  ipcMain.handle(channels.toggleFavorite, (_event, assetId: unknown) =>
+    runtime.store.toggleFavorite(validAssetId(assetId))
   )
-  ipcMain.handle(RENAME_COLLECTION_CHANNEL, (_event, id: string, name: string) =>
-    runtime.store.renameCollection(id, typeof name === 'string' ? name : '')
+  ipcMain.handle(channels.createCollection, (_event, name: unknown) =>
+    runtime.store.createCollection(validLabel(name))
   )
-  ipcMain.handle(DELETE_COLLECTION_CHANNEL, (_event, id: string) =>
-    runtime.store.deleteCollection(id)
+  ipcMain.handle(channels.renameCollection, (_event, id: unknown, name: unknown) =>
+    runtime.store.renameCollection(validAssetId(id), validLabel(name))
   )
-  ipcMain.handle(ADD_ASSETS_TO_COLLECTION_CHANNEL, (_event, ids: unknown, collectionId: string) =>
-    runtime.store.addAssetsToCollection(validIds(ids), collectionId)
+  ipcMain.handle(channels.deleteCollection, (_event, id: unknown) =>
+    runtime.store.deleteCollection(validAssetId(id))
   )
-  ipcMain.handle(REVEAL_ASSET_CHANNEL, (_event, assetId: string) => {
-    const asset = runtime.store.getAssetPath(assetId)
+  ipcMain.handle(channels.addToCollection, (_event, ids: unknown, collectionId: unknown) =>
+    runtime.store.addAssetsToCollection(validAssetIds(ids), validAssetId(collectionId))
+  )
+  ipcMain.handle(channels.reveal, (_event, assetId: unknown) => {
+    const asset = runtime.store.getAssetPath(validAssetId(assetId))
     if (!asset.ok) return asset
     shell.showItemInFolder(asset.value.filePath)
     return ok(undefined)
   })
-  ipcMain.handle(REGENERATE_PREVIEWS_CHANNEL, (event, ids: unknown) => {
-    const queued = runtime.store.enqueuePreview(validIds(ids), 20)
+  ipcMain.handle(channels.regeneratePreviews, (event, ids: unknown) => {
+    const queued = runtime.store.enqueuePreview(validAssetIds(ids), 20)
     if (queued.ok) void pumpPreviews(event.sender)
     return queued
   })
-  ipcMain.handle(PREPARE_ASSET_DRAG_CHANNEL, async (_event, request: AssetDragRequest) => {
-    const ids = validIds(request?.assetIds, 32)
-    if (!ids.length) return fail('Select at least one asset.', 'drag')
-    for (const id of ids) {
-      const asset = runtime.store.getAssetPath(id)
-      if (!asset.ok) return asset
-      try {
-        if (!(await stat(asset.value.filePath)).isFile())
-          return fail('Asset file is missing.', 'drag')
-      } catch {
-        return fail('Asset file is missing.', 'drag')
-      }
-    }
-    return ok(undefined)
-  })
-
-  ipcMain.on(START_ASSET_DRAG_CHANNEL, (event: IpcMainEvent, request: AssetDragRequest) => {
-    const assetIds = validIds(request?.assetIds, 32)
+  ipcMain.on(channels.startDrag, (event: IpcMainEvent, request: unknown) => {
+    const { assetIds } = parseAssetDragRequest(request)
     try {
       const files = assetIds.map((id) => {
         const asset = runtime.store.getAssetPath(id)
         if (!asset.ok) throw new Error(asset.error.message)
+        if (asset.value.status !== 'ready') throw new Error('Asset is not available for dragging.')
         const filePath = normalize(asset.value.filePath)
+        const extension = extname(filePath).toLocaleLowerCase('en-US')
+        const supported =
+          asset.value.mediaType === 'audio'
+            ? AUDIO_EXTENSIONS.has(extension)
+            : VIDEO_EXTENSIONS.has(extension)
+        if (!supported) throw new Error('Asset format is not supported for dragging.')
         if (!statSync(filePath).isFile()) throw new Error('Asset file is missing.')
         return filePath
       })
@@ -288,9 +264,9 @@ export function registerAssetIpc(): AssetIpcRegistration {
       const dragItem: Parameters<WebContents['startDrag']>[0] = { file: files[0], icon }
       if (files.length > 1) dragItem.files = files
       event.sender.startDrag(dragItem)
-      event.sender.send(ASSET_DRAG_EVENT_CHANNEL, { type: 'drag-started', assetIds })
+      event.sender.send(channels.dragEvent, { type: 'drag-started', assetIds })
     } catch (error) {
-      event.sender.send(ASSET_DRAG_EVENT_CHANNEL, {
+      event.sender.send(channels.dragEvent, {
         type: 'drag-failed',
         assetIds,
         error: {
@@ -307,15 +283,10 @@ export function registerAssetIpc(): AssetIpcRegistration {
   return {
     dispose: () => {
       disposed = true
-      for (const channel of INVOKE_CHANNELS) ipcMain.removeHandler(channel)
-      ipcMain.removeAllListeners(START_ASSET_DRAG_CHANNEL)
+      for (const channel of assetInvokeChannels) ipcMain.removeHandler(channel)
+      ipcMain.removeAllListeners(channels.startDrag)
       runtime.store.close()
     },
-    resolveAssetPath: (assetId, kind) => {
-      const result = runtime.store.resolveAssetPath(assetId, kind)
-      return result.ok
-        ? { ok: true, value: result.value }
-        : { ok: false, error: { ...result.error, phase: result.error.phase ?? 'asset' } }
-    }
+    resolveAssetPath: (assetId, kind) => runtime.store.resolveAssetPath(assetId, kind)
   }
 }

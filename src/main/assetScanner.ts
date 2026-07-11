@@ -1,15 +1,12 @@
 import { readdir, stat } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { join, relative } from 'node:path'
 import {
-  SUPPORTED_AUDIO_EXTENSIONS,
-  SUPPORTED_VIDEO_EXTENSIONS,
   type AssetJobEvent,
-  type AssetKind,
-  type AssetMediaType,
   type AssetPackSummary,
   type AssetScanResult,
   type OverlayMode
 } from '../shared/clipdock'
+import { assetMediaType, inferAssetKind } from './assetClassification'
 import type { AssetStore } from './assetStore'
 import { probeMedia } from './mediaProbe'
 
@@ -22,27 +19,6 @@ const SKIPPED_DIRECTORIES = new Set([
   '.hg'
 ])
 
-function mediaTypeForPath(filePath: string): AssetMediaType | null {
-  const extension = extname(filePath).toLocaleLowerCase('en-US')
-  if (SUPPORTED_VIDEO_EXTENSIONS.includes(extension as never)) return 'video'
-  if (SUPPORTED_AUDIO_EXTENSIONS.includes(extension as never)) return 'audio'
-  return null
-}
-
-function inferKind(filePath: string, mediaType: AssetMediaType): AssetKind {
-  if (mediaType === 'audio') return 'sound'
-  const terms = filePath.toLocaleLowerCase('en-US').split(/[\\/_\-.\s]+/)
-  if (terms.some((term) => ['transition', 'transitions', 'trans', 'wipe', 'intro'].includes(term)))
-    return 'transition'
-  if (
-    terms.some((term) =>
-      ['overlay', 'overlays', 'leak', 'grain', 'particle', 'particles', 'dust'].includes(term)
-    )
-  )
-    return 'overlay'
-  return 'unknown'
-}
-
 async function collectMediaFiles(folderPath: string): Promise<string[]> {
   const files: string[] = []
   const entries = await readdir(folderPath, { withFileTypes: true })
@@ -51,11 +27,11 @@ async function collectMediaFiles(folderPath: string): Promise<string[]> {
     if (entry.isDirectory()) {
       if (!entry.name.startsWith('.') && !SKIPPED_DIRECTORIES.has(entry.name))
         files.push(...(await collectMediaFiles(path)))
-    } else if (entry.isFile() && mediaTypeForPath(path)) {
+    } else if (entry.isFile() && assetMediaType(path)) {
       files.push(path)
     }
   }
-  return files
+  return files.sort((left, right) => left.localeCompare(right))
 }
 
 export async function scanAssetPack(
@@ -80,7 +56,7 @@ export async function scanAssetPack(
     })
     try {
       const stats = await stat(filePath)
-      const mediaType = mediaTypeForPath(filePath)
+      const mediaType = assetMediaType(filePath)
       if (!mediaType) continue
       let metadata = {
         durationMs: null as number | null,
@@ -99,7 +75,7 @@ export async function scanAssetPack(
       } catch {
         failedAssets += 1
       }
-      const kind = inferKind(filePath, mediaType)
+      const kind = inferAssetKind(relative(pack.rootPath, filePath), mediaType)
       const overlayMode: OverlayMode = kind === 'overlay' && metadata.hasAlpha ? 'alpha' : 'raw'
       const saved = store.upsertScannedAsset({
         packId: pack.id,

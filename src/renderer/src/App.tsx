@@ -8,15 +8,17 @@ import {
   type JSX,
   type MouseEvent
 } from 'react'
-import { Filter, Grid2X2, PanelRight, RefreshCw, Search } from 'lucide-react'
+import { Grid2X2, PanelRight, RefreshCw, Search } from 'lucide-react'
 import type {
   AssetJobEvent,
   AssetKind,
   AssetNavigationSnapshot,
   AssetQuery,
+  AssetSortMode,
   AssetSummary,
   AssetUpdateRequest,
-  ClipdockApi
+  ClipdockApi,
+  ClipdockResult
 } from '../../shared/clipdock'
 import { AssetGrid } from './components/AssetGrid'
 import { AssetInspector } from './components/AssetInspector'
@@ -32,8 +34,30 @@ const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
   pendingPreviewCount: 0
 }
 
-function api(): ClipdockApi | null {
-  return window.clipdock ?? null
+type LibraryScope =
+  | { type: 'all' }
+  | { type: 'favorites' }
+  | { type: 'pack'; id: string }
+  | { type: 'collection'; id: string }
+  | { type: 'tag'; name: string }
+
+function scopeFilters(scope: LibraryScope): Partial<AssetQuery> {
+  if (scope.type === 'pack') return { packIds: [scope.id] }
+  if (scope.type === 'collection') return { collectionIds: [scope.id] }
+  if (scope.type === 'tag') return { tags: [scope.name] }
+  if (scope.type === 'favorites') return { favoriteOnly: true }
+  return {}
+}
+
+function scopeName(scope: LibraryScope, navigation: AssetNavigationSnapshot): string {
+  if (scope.type === 'pack')
+    return navigation.packs.find((pack) => pack.id === scope.id)?.name ?? 'Pack'
+  if (scope.type === 'collection')
+    return (
+      navigation.collections.find((collection) => collection.id === scope.id)?.name ?? 'Collection'
+    )
+  if (scope.type === 'tag') return `#${scope.name}`
+  return scope.type === 'favorites' ? 'Favorites' : 'Entire library'
 }
 
 function App(): JSX.Element {
@@ -44,11 +68,8 @@ function App(): JSX.Element {
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [kind, setKind] = useState<AssetKind | 'all'>('all')
-  const [activePackId, setActivePackId] = useState<string | null>(null)
-  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
-  const [selectedTag, setSelectedTag] = useState<string | null>(null)
-  const [favoriteOnly, setFavoriteOnly] = useState(false)
-  const [sort, setSort] = useState<AssetQuery['sort']>('name')
+  const [scope, setScope] = useState<LibraryScope>({ type: 'all' })
+  const [sort, setSort] = useState<AssetSortMode>('name')
   const [density, setDensity] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -60,19 +81,17 @@ function App(): JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
   const lastSelectedIndex = useRef<number | null>(null)
   const nextCursorRef = useRef<string | null>(null)
+  const assetRequestRef = useRef(0)
 
   const query = useMemo<AssetQuery>(
     () => ({
       search: debouncedSearch || undefined,
       kinds: kind === 'all' ? undefined : [kind],
-      packIds: activePackId ? [activePackId] : undefined,
-      collectionIds: activeCollectionId ? [activeCollectionId] : undefined,
-      tags: selectedTag ? [selectedTag] : undefined,
-      favoriteOnly,
+      ...scopeFilters(scope),
       sort,
       limit: 200
     }),
-    [debouncedSearch, kind, activePackId, activeCollectionId, selectedTag, favoriteOnly, sort]
+    [debouncedSearch, kind, scope, sort]
   )
 
   const selectedAssets = useMemo(
@@ -83,24 +102,19 @@ function App(): JSX.Element {
   const quickLookAsset = assets.find((asset) => asset.id === quickLookId) ?? null
 
   const loadNavigation = useCallback(async (): Promise<void> => {
-    const bridge = api()
-    if (!bridge) return
-    const result = await bridge.getNavigationSnapshot()
+    const result = await window.clipdock.getNavigationSnapshot()
     if (result.ok) setNavigation(result.value)
     else setStatus(result.error.message)
   }, [])
 
   const loadAssets = useCallback(
-    async (append = false): Promise<void> => {
-      const bridge = api()
-      if (!bridge) {
-        setStatus('Secure preload bridge unavailable.')
-        return
-      }
-      const result = await bridge.queryAssets({
+    async (append = false, resetSelection = false): Promise<void> => {
+      const requestId = ++assetRequestRef.current
+      const result = await window.clipdock.queryAssets({
         ...query,
         cursor: append ? (nextCursorRef.current ?? undefined) : undefined
       })
+      if (requestId !== assetRequestRef.current) return
       if (!result.ok) {
         setStatus(result.error.message)
         return
@@ -110,15 +124,24 @@ function App(): JSX.Element {
       nextCursorRef.current = result.value.nextCursor
       setTotalCount(result.value.totalCount)
       if (!append) {
-        setSelectedIds(new Set())
-        setActiveId(result.value.items[0]?.id ?? null)
+        if (resetSelection) {
+          setSelectedIds(new Set())
+          setActiveId(result.value.items[0]?.id ?? null)
+          lastSelectedIndex.current = result.value.items.length ? 0 : null
+        } else {
+          const available = new Set(result.value.items.map((asset) => asset.id))
+          setSelectedIds((current) => new Set([...current].filter((id) => available.has(id))))
+          setActiveId((current) =>
+            current && available.has(current) ? current : (result.value.items[0]?.id ?? null)
+          )
+        }
       }
     },
     [query]
   )
 
   const refresh = useCallback(async (): Promise<void> => {
-    await Promise.all([loadNavigation(), loadAssets(false)])
+    await Promise.all([loadNavigation(), loadAssets(false, false)])
   }, [loadAssets, loadNavigation])
 
   useEffect(() => {
@@ -126,27 +149,40 @@ function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [search])
   useEffect(() => {
-    const timer = setTimeout(() => void loadAssets(false), 0)
-    return () => clearTimeout(timer)
+    let active = true
+    queueMicrotask(() => {
+      if (active) void loadAssets(false, true)
+    })
+    return () => {
+      active = false
+    }
   }, [loadAssets])
   useEffect(() => {
-    const timer = setTimeout(() => void loadNavigation(), 0)
-    return () => clearTimeout(timer)
+    let active = true
+    queueMicrotask(() => {
+      if (active) void loadNavigation()
+    })
+    return () => {
+      active = false
+    }
   }, [loadNavigation])
 
   useEffect(() => {
-    const bridge = api()
-    if (!bridge) return
-    const offJobs = bridge.onAssetJobEvent((event: AssetJobEvent) => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = (): void => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => void refresh(), 150)
+    }
+    const offJobs = window.clipdock.onAssetJobEvent((event: AssetJobEvent) => {
       if (event.type === 'scan-progress')
         setJobProgress(`Scanning ${event.completed + 1} / ${event.total}`)
       if (event.type === 'preview-progress')
         setJobProgress(`Building previews ${event.completed} / ${event.total}`)
-      if (event.type === 'scan-completed' || event.type === 'preview-completed') void refresh()
+      if (event.type === 'scan-completed' || event.type === 'preview-completed') scheduleRefresh()
       if (event.type === 'scan-completed') setJobProgress(null)
       if (event.type === 'preview-failed') setStatus(event.message)
     })
-    const offDrag = bridge.onAssetDragEvent((event) => {
+    const offDrag = window.clipdock.onAssetDragEvent((event) => {
       setStatus(
         event.type === 'drag-started'
           ? `Dragged ${event.assetIds.length} asset${event.assetIds.length === 1 ? '' : 's'}.`
@@ -154,53 +190,41 @@ function App(): JSX.Element {
       )
     })
     return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
       offJobs()
       offDrag()
     }
   }, [refresh])
 
-  const clearScope = (): void => {
-    setActivePackId(null)
-    setActiveCollectionId(null)
-    setSelectedTag(null)
-    setFavoriteOnly(false)
-  }
-
   const mutate = useCallback(
-    async (
-      operation: (bridge: ClipdockApi) => Promise<{ ok: boolean; error?: { message: string } }>
-    ): Promise<void> => {
-      const bridge = api()
-      if (!bridge) return
-      const result = await operation(bridge)
-      if (!result.ok) setStatus(result.error?.message ?? 'Operation failed.')
+    async (operation: (bridge: ClipdockApi) => Promise<ClipdockResult<unknown>>): Promise<void> => {
+      const result = await operation(window.clipdock)
+      if (!result.ok) setStatus(result.error.message)
       else await refresh()
     },
     [refresh]
   )
 
   const addPack = async (): Promise<void> => {
-    const bridge = api()
-    if (!bridge) return
     setBusy(true)
     setStatus('Adding effect pack...')
-    const result = await bridge.addPackFolder()
+    const result = await window.clipdock.addPackFolder()
     setBusy(false)
     setStatus(
       result.ok ? `Imported ${result.value.importedAssets} new assets.` : result.error.message
     )
     if (result.ok) {
-      clearScope()
-      await refresh()
+      const alreadyShowingAll = scope.type === 'all'
+      setScope({ type: 'all' })
+      await loadNavigation()
+      if (alreadyShowingAll) await loadAssets(false, false)
     }
   }
 
   const rescan = async (): Promise<void> => {
-    const bridge = api()
-    if (!bridge) return
     setBusy(true)
     setStatus('Scanning packs...')
-    const result = await bridge.rescanPacks(activePackId ? [activePackId] : undefined)
+    const result = await window.clipdock.rescanPacks(scope.type === 'pack' ? [scope.id] : undefined)
     setBusy(false)
     setJobProgress(null)
     setStatus(result.ok ? 'Pack scan complete.' : result.error.message)
@@ -233,12 +257,10 @@ function App(): JSX.Element {
   }
 
   const dragAsset = (asset: AssetSummary, event: DragEvent<HTMLElement>): void => {
-    const bridge = api()
-    if (!bridge) return
     const ids = selectedIds.has(asset.id) ? [...selectedIds] : [asset.id]
     event.preventDefault()
     event.dataTransfer.setData('application/x-clipdock-asset-ids', JSON.stringify(ids))
-    bridge.startAssetDrag({ assetIds: ids })
+    window.clipdock.startAssetDrag({ assetIds: ids })
   }
 
   useEffect(() => {
@@ -290,6 +312,7 @@ function App(): JSX.Element {
             : Math.max(0, current - 1)
         setActiveId(assets[next].id)
         setSelectedIds(new Set([assets[next].id]))
+        lastSelectedIndex.current = next
       }
     }
     window.addEventListener('keydown', handleKey)
@@ -300,28 +323,16 @@ function App(): JSX.Element {
     <main className={`asset-app${inspectorOpen ? ' inspector-visible' : ''}`}>
       <AssetSidebar
         navigation={navigation}
-        activePackId={activePackId}
-        activeCollectionId={activeCollectionId}
-        selectedTag={selectedTag}
-        favoriteOnly={favoriteOnly}
+        activePackId={scope.type === 'pack' ? scope.id : null}
+        activeCollectionId={scope.type === 'collection' ? scope.id : null}
+        selectedTag={scope.type === 'tag' ? scope.name : null}
+        favoriteOnly={scope.type === 'favorites'}
         busy={busy}
-        onShowAll={() => clearScope()}
-        onShowFavorites={() => {
-          clearScope()
-          setFavoriteOnly(true)
-        }}
-        onSelectPack={(id) => {
-          clearScope()
-          setActivePackId(id)
-        }}
-        onSelectCollection={(id) => {
-          clearScope()
-          setActiveCollectionId(id)
-        }}
-        onSelectTag={(tag) => {
-          clearScope()
-          setSelectedTag(tag)
-        }}
+        onShowAll={() => setScope({ type: 'all' })}
+        onShowFavorites={() => setScope({ type: 'favorites' })}
+        onSelectPack={(id) => setScope({ type: 'pack', id })}
+        onSelectCollection={(id) => setScope({ type: 'collection', id })}
+        onSelectTag={(name) => setScope({ type: 'tag', name })}
         onAddPack={() => void addPack()}
         onRelinkPack={(id) => void mutate((bridge) => bridge.relinkPack(id))}
         onCreateCollection={() => {
@@ -369,7 +380,7 @@ function App(): JSX.Element {
           <div className="toolbar-actions">
             <select
               value={sort}
-              onChange={(event) => setSort(event.target.value as AssetQuery['sort'])}
+              onChange={(event) => setSort(event.target.value as AssetSortMode)}
               aria-label="Sort assets"
             >
               <option value="name">Name</option>
@@ -380,6 +391,7 @@ function App(): JSX.Element {
             <button
               type="button"
               title="Decrease thumbnail size"
+              aria-label="Decrease thumbnail size"
               onClick={() => setDensity((value) => Math.max(0, value - 1))}
             >
               <Grid2X2 size={16} />
@@ -393,13 +405,11 @@ function App(): JSX.Element {
               onChange={(event) => setDensity(Number(event.target.value))}
               aria-label="Thumbnail size"
             />
-            <button type="button" title="Filters">
-              <Filter size={17} />
-            </button>
             <button
               type="button"
               className={inspectorOpen ? 'active' : ''}
               title="Inspector"
+              aria-label="Toggle inspector"
               onClick={() => setInspectorOpen((value) => !value)}
             >
               <PanelRight size={17} />
@@ -407,6 +417,7 @@ function App(): JSX.Element {
             <button
               type="button"
               title="Rescan packs"
+              aria-label="Rescan packs"
               onClick={() => void rescan()}
               disabled={busy}
             >
@@ -420,18 +431,7 @@ function App(): JSX.Element {
             {totalCount} asset{totalCount === 1 ? '' : 's'}
           </span>
           {selectedIds.size ? <strong>{selectedIds.size} selected</strong> : null}
-          <span>
-            {activePackId
-              ? navigation.packs.find((pack) => pack.id === activePackId)?.name
-              : activeCollectionId
-                ? navigation.collections.find((collection) => collection.id === activeCollectionId)
-                    ?.name
-                : selectedTag
-                  ? `#${selectedTag}`
-                  : favoriteOnly
-                    ? 'Favorites'
-                    : 'Entire library'}
-          </span>
+          <span>{scopeName(scope, navigation)}</span>
         </div>
 
         <AssetGrid

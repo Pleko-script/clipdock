@@ -4,16 +4,13 @@ import { createRequire } from 'node:module'
 const requireFromMain = createRequire(__filename)
 const ffprobeStatic = requireFromMain('ffprobe-static') as { path?: string }
 
-export interface VideoMetadata {
+export interface MediaMetadata {
   durationMs: number | null
   widthPixels: number | null
   heightPixels: number | null
   fps: number | null
   codec: string | null
   metadataJson: string | null
-}
-
-export interface MediaMetadata extends VideoMetadata {
   audioCodec: string | null
   sampleRate: number | null
   channels: number | null
@@ -174,17 +171,4 @@ export async function probeMedia(filePath: string): Promise<MediaMetadata> {
       }
     })
   })
-}
-
-export async function probeVideo(filePath: string): Promise<VideoMetadata> {
-  const metadata = await probeMedia(filePath)
-
-  return {
-    durationMs: metadata.durationMs,
-    widthPixels: metadata.widthPixels,
-    heightPixels: metadata.heightPixels,
-    fps: metadata.fps,
-    codec: metadata.codec,
-    metadataJson: metadata.metadataJson
-  }
 }

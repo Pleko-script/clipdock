@@ -82,9 +82,18 @@ function AssetCard({
   return (
     <article
       className={`asset-card${selected ? ' selected' : ''}${active ? ' active' : ''}${asset.status !== 'ready' ? ' unavailable' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
       draggable={asset.status === 'ready'}
       onClick={onSelect}
       onDoubleClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        onOpen()
+      }}
       onDragStart={onDrag}
       onMouseEnter={startHover}
       onMouseLeave={stopHover}

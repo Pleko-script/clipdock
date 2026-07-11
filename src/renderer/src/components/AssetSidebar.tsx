@@ -118,6 +118,7 @@ export function AssetSidebar({
               className="sidebar-item-action"
               onClick={() => onRelinkPack(pack.id)}
               title="Relink pack"
+              aria-label={`Relink ${pack.name}`}
             >
               <Link2 size={14} />
             </button>
@@ -157,6 +158,7 @@ export function AssetSidebar({
                 type="button"
                 onClick={() => onRenameCollection(collection.id, collection.name)}
                 title="Rename collection"
+                aria-label={`Rename ${collection.name}`}
               >
                 <Pencil size={13} />
               </button>
@@ -164,6 +166,7 @@ export function AssetSidebar({
                 type="button"
                 onClick={() => onDeleteCollection(collection.id, collection.name)}
                 title="Delete collection"
+                aria-label={`Delete ${collection.name}`}
               >
                 <Trash2 size={13} />
               </button>

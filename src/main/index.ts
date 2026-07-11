@@ -1,140 +1,127 @@
+import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, net, protocol, shell } from 'electron'
 import { stat } from 'node:fs/promises'
-import { join } from 'path'
-import { extname } from 'node:path'
-import { pathToFileURL } from 'url'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { extname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import icon from '../../resources/icon.png?asset'
 import { registerAssetIpc, type AssetIpcRegistration } from './assetIpc'
-import { registerLibraryIpc, type LibraryIpcRegistration } from './libraryIpc'
 
-let libraryIpc: LibraryIpcRegistration | null = null
 let assetIpc: AssetIpcRegistration | null = null
 
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'clipdock-media',
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      corsEnabled: true,
-      stream: true
-    }
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
   }
 ])
 
-function getAllowedExternalUrl(rawUrl: string): string | null {
-  try {
-    const parsedUrl = new URL(rawUrl)
+const mediaTypes: Readonly<Record<string, string>> = {
+  '.svg': 'image/svg+xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.aac': 'audio/aac',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/x-m4v',
+  '.mpg': 'video/mpeg',
+  '.mpeg': 'video/mpeg',
+  '.ts': 'video/mp2t',
+  '.mts': 'video/mp2t',
+  '.m2ts': 'video/mp2t',
+  '.mxf': 'application/mxf'
+}
 
-    if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
-      return parsedUrl.toString()
-    }
+function externalUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null
   } catch {
     return null
   }
-
-  return null
 }
 
-function normalizeAppUrl(rawUrl: string): string {
-  return new URL(rawUrl).toString()
-}
-
-function isAllowedAppNavigation(targetUrl: string, allowedAppUrl: string): boolean {
+function isSameNavigation(targetUrl: string, appUrl: string): boolean {
   try {
-    return new URL(targetUrl).toString() === allowedAppUrl
+    return new URL(targetUrl).toString() === appUrl
   } catch {
     return false
   }
 }
 
-function contentTypeForPath(filePath: string): string {
-  const extension = extname(filePath).toLocaleLowerCase('en-US')
-
-  if (extension === '.svg') return 'image/svg+xml'
-  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
-  if (extension === '.png') return 'image/png'
-  if (extension === '.webp') return 'image/webp'
-  if (extension === '.wav') return 'audio/wav'
-  if (extension === '.mp3') return 'audio/mpeg'
-  if (extension === '.aac') return 'audio/aac'
-  if (extension === '.m4a') return 'audio/mp4'
-  if (extension === '.flac') return 'audio/flac'
-  if (extension === '.ogg') return 'audio/ogg'
-  if (extension === '.webm') return 'video/webm'
-  if (extension === '.mov') return 'video/quicktime'
-  if (extension === '.mkv') return 'video/x-matroska'
-
-  return 'video/mp4'
+function parseAssetRequest(rawUrl: string): {
+  kind: 'thumbnail' | 'preview' | 'media'
+  assetId: string
+} | null {
+  try {
+    const url = new URL(rawUrl)
+    const kind =
+      url.host === 'thumbnail' || url.host === 'preview' || url.host === 'media' ? url.host : null
+    const assetId = decodeURIComponent(url.pathname.slice(1))
+    return kind && assetId && assetId.length <= 128 ? { kind, assetId } : null
+  } catch {
+    return null
+  }
 }
 
-function registerAssetProtocol(): void {
+function registerMediaProtocol(): void {
   protocol.handle('clipdock-media', async (request) => {
-    if (!libraryIpc || !assetIpc) {
-      return new Response('ClipDock library is not ready.', { status: 503 })
-    }
+    if (!assetIpc) return new Response('ClipDock is not ready.', { status: 503 })
 
-    const requestUrl = new URL(request.url)
-    const kind =
-      requestUrl.host === 'thumbnail' ||
-      requestUrl.host === 'preview' ||
-      requestUrl.host === 'media'
-        ? requestUrl.host
-        : requestUrl.host === 'clip'
-          ? 'media'
-          : null
-    const assetId = decodeURIComponent(requestUrl.pathname.replace(/^\//, ''))
+    const parsed = parseAssetRequest(request.url)
+    if (!parsed) return new Response('Unsupported asset URL.', { status: 404 })
 
-    if (!kind || assetId.length === 0) {
-      return new Response('Unsupported ClipDock asset URL.', { status: 404 })
-    }
-
-    const asset = assetIpc.resolveAssetPath(assetId, kind)
-    const legacyAsset =
-      !asset.ok && kind !== 'preview'
-        ? libraryIpc.resolveAssetPath(assetId, kind === 'thumbnail' ? 'thumbnail' : 'media')
-        : asset
-
-    if (!legacyAsset.ok) {
-      return new Response(legacyAsset.error.message, { status: 404 })
-    }
+    const resolved = assetIpc.resolveAssetPath(parsed.assetId, parsed.kind)
+    if (!resolved.ok) return new Response(resolved.error.message, { status: 404 })
 
     try {
-      const stats = await stat(legacyAsset.value)
-
-      if (!stats.isFile()) {
-        return new Response('ClipDock asset is not a file.', { status: 404 })
+      if (!(await stat(resolved.value)).isFile()) {
+        return new Response('Asset is not a file.', { status: 404 })
       }
     } catch {
-      return new Response('ClipDock asset is missing.', { status: 404 })
+      return new Response('Asset is missing.', { status: 404 })
     }
 
-    const response = await net.fetch(pathToFileURL(legacyAsset.value).toString())
-
+    const response = await net.fetch(pathToFileURL(resolved.value).toString(), {
+      headers: request.headers
+    })
+    const headers = new Headers(response.headers)
+    headers.set(
+      'content-type',
+      mediaTypes[extname(resolved.value).toLowerCase()] ?? 'application/octet-stream'
+    )
+    headers.set(
+      'cache-control',
+      parsed.kind === 'media' ? 'no-store' : 'public, max-age=31536000, immutable'
+    )
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
-      headers: {
-        'content-type': contentTypeForPath(legacyAsset.value),
-        'cache-control': kind === 'thumbnail' ? 'public, max-age=31536000' : 'no-store'
-      }
+      headers
     })
   })
 }
 
 function createWindow(): void {
   const rendererUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
-  const rendererIndexPath = join(__dirname, '../renderer/index.html')
+  const rendererIndex = join(__dirname, '../renderer/index.html')
   const appUrl = rendererUrl
-    ? normalizeAppUrl(rendererUrl)
-    : pathToFileURL(rendererIndexPath).toString()
-
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
+    ? new URL(rendererUrl).toString()
+    : pathToFileURL(rendererIndex).toString()
+  const window = new BrowserWindow({
     width: 1320,
     height: 820,
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -147,95 +134,47 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
-
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    const externalUrl = getAllowedExternalUrl(url)
-
-    if (externalUrl) {
-      void shell.openExternal(externalUrl).catch((error) => {
-        console.error('Failed to open external URL', error)
-      })
-    }
-
+  window.once('ready-to-show', () => window.show())
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const allowed = externalUrl(url)
+    if (allowed)
+      void shell.openExternal(allowed).catch((error) => console.error('External URL failed', error))
     return { action: 'deny' }
   })
-
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!isAllowedAppNavigation(url, appUrl)) {
-      event.preventDefault()
-    }
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isSameNavigation(url, appUrl)) event.preventDefault()
   })
-
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[clipdock] renderer process gone:', details)
+  window.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[clipdock] renderer process gone', details)
   })
+  window.on('unresponsive', () => console.error('[clipdock] main window became unresponsive'))
 
-  mainWindow.on('unresponsive', () => {
-    console.error('[clipdock] main window became unresponsive')
-  })
-
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
-  if (rendererUrl) {
-    mainWindow.loadURL(appUrl)
-  } else {
-    mainWindow.loadFile(rendererIndexPath)
-  }
+  if (rendererUrl) void window.loadURL(appUrl)
+  else void window.loadFile(rendererIndex)
 }
 
-process.on('uncaughtException', (error) => {
-  console.error('[clipdock] uncaughtException:', error)
-})
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[clipdock] unhandledRejection:', reason)
-})
-
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
-
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+app
+  .whenReady()
+  .then(() => {
+    electronApp.setAppUserModelId('app.clipdock.desktop')
+    app.on('browser-window-created', (_event, window) => optimizer.watchWindowShortcuts(window))
+    assetIpc = registerAssetIpc()
+    registerMediaProtocol()
+    createWindow()
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
   })
-
-  libraryIpc = registerLibraryIpc()
-  assetIpc = registerAssetIpc()
-  registerAssetProtocol()
-
-  createWindow()
-
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  .catch((error) => {
+    console.error('[clipdock] startup failed', error)
+    app.quit()
   })
-})
 
 app.on('before-quit', () => {
   assetIpc?.dispose()
   assetIpc = null
-  libraryIpc?.dispose()
-  libraryIpc = null
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  if (process.platform !== 'darwin') app.quit()
 })
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
