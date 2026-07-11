@@ -1,108 +1,64 @@
 # ClipDock
 
-ClipDock is a local desktop video-library app for editor workflows, built as an Electron, React, TypeScript, SQLite, FFmpeg, and FFprobe app. It lets you add local video folders, scan clips recursively, browse thumbnails, search, tag, favorite, preview, and drag real video files out to tools such as DaVinci Resolve.
+ClipDock is a local desktop library for transition clips, video overlays, and sound effects. Every item is a normal video or audio file that can be dragged into an editor such as DaVinci Resolve or Adobe Premiere Pro. ClipDock does not manage presets, templates, plugins, MOGRTs, installers, or image sequences.
 
-ClipDock runs fully locally. No cloud, no accounts, no collaboration, no telemetry, no remote logging, and no source-media deletion are part of the MVP.
+The app is built with Electron, React, TypeScript, SQLite, FFmpeg, and FFprobe. It runs offline: no cloud, accounts, telemetry, or remote logging.
 
-## Install
+## Install and run
 
 ```bash
 npm install
-```
-
-The install includes bundled `ffmpeg-static` and `ffprobe-static` binaries used for local metadata extraction and thumbnail generation.
-
-## Run Dev Mode
-
-```bash
 npm run dev
 ```
 
-## Build
+Build and verify with:
 
 ```bash
-npm run build
-```
-
-Windows packaging is available with:
-
-```bash
-npm run build:win
-```
-
-## Verification
-
-```bash
-npm run test:mvp
-npm run typecheck
+npm test
 npm run lint
+npm run typecheck
 npm run build
 ```
 
-## Add A Video Folder
+Create a Windows package with `npm run build:win`.
 
-1. Start ClipDock with `npm run dev`.
-2. Click `Add Folder`.
-3. Pick a local folder that contains supported video files.
-4. ClipDock recursively scans supported videos, extracts FFprobe metadata, generates cached thumbnails, and stores results in SQLite under Electron user data.
-5. Use `Rescan` to re-check linked folders. Unchanged clips are cached by file path, size, and modified timestamp.
+## Workflow
 
-Supported extensions: `.mp4`, `.mov`, `.mxf`, `.mkv`, `.avi`, `.webm`, `.m4v`, `.mpg`, `.mpeg`, `.ts`, `.mts`, `.m2ts`.
+1. Select **Add Pack** and choose one folder. The folder becomes a pack; its subfolders become categories.
+2. ClipDock scans supported video and audio files, stores metadata first, and generates previews in the background.
+3. Browse the virtualized grid, search, filter by asset type, add favorites, tags, notes, or Collections, and correct automatic classifications in the Inspector.
+4. Hover a card for playback or press `Space` for Quick Look. Quick Look can switch between the contextual preview and original media.
+5. Drag one or multiple cards into the editor. ClipDock always passes the unchanged source files to the operating system.
 
-## Daily Workflow
+Transitions are short standalone videos placed between two timeline clips. Overlays belong on a higher video track; use the alpha channel or Screen/Add blend mode as indicated. Sounds are dragged onto an audio track.
 
-- Browse clips in the visual grid or focus the larger preview stage.
-- Search by filename, path, tags, or notes.
-- Filter favorites or tags from the sidebar.
-- Create ClipDock bins in the sidebar for project, scene, client, or delivery groups.
-- Drag clips onto bins, or use right-click menus to add, move, remove, rename, or delete.
-- Click a clip to preview it. Metadata is available but kept secondary to playback.
-- Double-click a clip to focus its preview.
-- Rotate clips in 90 degree steps from the preview controls when phone or camera footage has the wrong orientation.
-- Use the tag editor and notes panel to organize clips.
-- Use `Reveal in Explorer`, `Copy Path`, or `Remove from ClipDock` from the right-click menu.
+## Supported media
 
-## Drag To DaVinci Resolve
+- Video: MP4, MOV, M4V, MKV, AVI, WebM, MPG, MPEG, TS, MTS, M2TS, and existing MXF compatibility.
+- Audio: WAV, MP3, AAC, M4A, FLAC, and OGG.
 
-Drag a clip card from ClipDock into a target that accepts normal OS file drops. The renderer sends clip IDs only through `window.clipdock`; the Electron main process resolves and validates the real local file path before calling native `webContents.startDrag`.
+Folder and filename terms classify transitions, overlays, and sounds automatically. FFprobe reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels. Classification and overlay mode remain editable.
 
-Primary target: DaVinci Resolve Media Pool. Direct timeline drops depend on Resolve's active panel and file-drop behavior. If Resolve rejects timeline drop, drop into the Media Pool first and then place the clip on the timeline.
+## Keyboard
 
-Multi-select is available with Ctrl-click or Cmd-click. ClipDock attempts native multi-file drag when more than one selected clip is dragged; if a target app accepts only one file, drag a single clip.
+- `/`: focus search
+- Arrow keys: navigate assets
+- `Space`: Quick Look
+- `F`: toggle favorite
+- `Esc`: close Quick Look or stop playback
+- `Ctrl/Cmd+A`, Shift-click, Ctrl/Cmd-click: multi-selection
+- `+` / `-`: change thumbnail size
 
-Rotated clips stay non-destructive. When a rotated clip is dragged out, ClipDock renders or reuses an app-owned rotated MP4 variant and drags that file instead of modifying the source media.
+## Local data and safety
 
-## Local Data
+SQLite and generated preview files live under Electron's `userData/clipdock-library` folder. Source media is referenced in place and is never moved, modified, or deleted. A missing pack can be relinked while retaining asset IDs, favorites, tags, notes, and Collections.
 
-- SQLite database: Electron `userData/clipdock-library/library.sqlite`
-- Managed copied media: Electron `userData/clipdock-library/managed-media`
-- Thumbnails: Electron `userData/clipdock-library/thumbnails`
-- Rotated drag exports: Electron `userData/clipdock-library/exports`
+The renderer uses a typed preload bridge with context isolation, sandboxing, disabled Node integration, and a constrained `clipdock-media://` protocol. Native drag paths, dialogs, SQLite, file access, FFmpeg, and FFprobe remain in the main process.
 
-Linked folders are referenced in place. Copied videos are explicit managed copies. Removing a clip or bin from ClipDock does not delete source media from disk.
+## Compatibility and limitations
 
-## Security Boundary
+Compatibility badges distinguish manually verified, expected, and unsupported combinations. Windows is the first supported test platform. H.264 MP4 transitions, ProRes 4444 alpha MOV overlays, H.264 screen overlays, WAV/MP3 sounds, multi-drag, and Unicode/long paths should be checked manually in Resolve and Premiere before a release is marked verified.
 
-- `contextIsolation` is enabled.
-- `nodeIntegration` is disabled.
-- The renderer sees only the typed `window.clipdock` preload API.
-- File system, SQLite, FFmpeg, FFprobe, shell reveal, clipboard, and native drag operations stay in the Electron main process.
-- Local preview and thumbnails are served through the constrained `clipdock-media://` protocol.
+ClipDock does not place media on a timeline or control the editor. Black-background screen-overlay detection, similar-effect detection, duplicate detection, custom demo scenes, and portable metadata sidecars remain optional future work.
 
-## Known Limitations
-
-- Thumbnail generation creates one representative frame per clip, around 10 percent into the video with a 1 second fallback.
-- Bad or unsupported files are skipped or stored with controlled scan errors; the scan continues.
-- Grid virtualization is not yet added. The UI is structured for large libraries, but very large folders may need the planned virtualization pass.
-- Drag-out compatibility is implemented as generic OS native file drag. Real DaVinci Resolve behavior must be smoke-tested on the target workstation.
-- No in/out subclip rendering, proxy generation, waveform generation, AI tagging, Resolve scripting API, or advanced timeline editing is included in the MVP.
-- Rotated drag exports currently target H.264 MP4 variants for compatibility.
-
-## Future Roadmap
-
-- Virtualized grid for very large libraries.
-- In/out marks per clip and temporary subclip rendering.
-- Resolve scripting `Send to DaVinci Resolve` action.
-- Proxy and waveform generation.
-- Similar-clip detection.
-- Target-app drag compatibility matrix for Resolve, Premiere Pro, Final Cut Pro, Explorer/Finder, and media players.
+See [DESIGN.md](./DESIGN.md) for the UI system and interaction contract.

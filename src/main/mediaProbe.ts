@@ -13,6 +13,13 @@ export interface VideoMetadata {
   metadataJson: string | null
 }
 
+export interface MediaMetadata extends VideoMetadata {
+  audioCodec: string | null
+  sampleRate: number | null
+  channels: number | null
+  hasAlpha: boolean
+}
+
 interface FfprobeStream {
   codec_type?: string
   codec_name?: string
@@ -21,6 +28,9 @@ interface FfprobeStream {
   duration?: string
   avg_frame_rate?: string
   r_frame_rate?: string
+  pix_fmt?: string
+  sample_rate?: string
+  channels?: number
 }
 
 interface FfprobeFormat {
@@ -95,9 +105,11 @@ function boundedMetadataJson(output: FfprobeOutput): string | null {
   return json.length > 8000 ? json.slice(0, 8000) : json
 }
 
-function metadataFromFfprobe(output: FfprobeOutput): VideoMetadata {
+function metadataFromFfprobe(output: FfprobeOutput): MediaMetadata {
   const videoStream = (output.streams ?? []).find((stream) => stream.codec_type === 'video')
+  const audioStream = (output.streams ?? []).find((stream) => stream.codec_type === 'audio')
   const durationMs = durationToMs(videoStream?.duration) ?? durationToMs(output.format?.duration)
+  const pixelFormat = videoStream?.pix_fmt?.toLowerCase() ?? ''
 
   return {
     durationMs,
@@ -105,7 +117,15 @@ function metadataFromFfprobe(output: FfprobeOutput): VideoMetadata {
     heightPixels: videoStream?.height ?? null,
     fps: parseFps(videoStream?.avg_frame_rate) ?? parseFps(videoStream?.r_frame_rate),
     codec: videoStream?.codec_name ?? null,
-    metadataJson: boundedMetadataJson(output)
+    metadataJson: boundedMetadataJson(output),
+    audioCodec: audioStream?.codec_name ?? null,
+    sampleRate: parseNumber(audioStream?.sample_rate),
+    channels: audioStream?.channels ?? null,
+    hasAlpha:
+      pixelFormat.includes('rgba') ||
+      pixelFormat.includes('argb') ||
+      pixelFormat.includes('yuva') ||
+      pixelFormat.includes('gbrap')
   }
 }
 
@@ -115,7 +135,7 @@ export function getFfprobePath(): string | null {
     : null
 }
 
-export async function probeVideo(filePath: string): Promise<VideoMetadata> {
+export async function probeMedia(filePath: string): Promise<MediaMetadata> {
   const ffprobePath = getFfprobePath()
 
   if (!ffprobePath) {
@@ -124,7 +144,7 @@ export async function probeVideo(filePath: string): Promise<VideoMetadata> {
 
   const args = ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', filePath]
 
-  return await new Promise<VideoMetadata>((resolve, reject) => {
+  return await new Promise<MediaMetadata>((resolve, reject) => {
     const child = spawn(ffprobePath, args, { windowsHide: true })
     const chunks: Buffer[] = []
     const errorChunks: Buffer[] = []
@@ -154,4 +174,17 @@ export async function probeVideo(filePath: string): Promise<VideoMetadata> {
       }
     })
   })
+}
+
+export async function probeVideo(filePath: string): Promise<VideoMetadata> {
+  const metadata = await probeMedia(filePath)
+
+  return {
+    durationMs: metadata.durationMs,
+    widthPixels: metadata.widthPixels,
+    heightPixels: metadata.heightPixels,
+    fps: metadata.fps,
+    codec: metadata.codec,
+    metadataJson: metadata.metadataJson
+  }
 }

@@ -1,334 +1,408 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
+import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const projectRoot = process.cwd()
-
-function read(relativePath) {
-  return readFileSync(join(projectRoot, relativePath), 'utf8')
-}
-
+const read = (path) => readFileSync(join(projectRoot, path), 'utf8')
 const packageJson = JSON.parse(read('package.json'))
 const shared = read('src/shared/clipdock.ts')
 const main = read('src/main/index.ts')
-const store = read('src/main/libraryStore.ts')
-const ipc = read('src/main/libraryIpc.ts')
+const assetStore = read('src/main/assetStore.ts')
+const assetIpc = read('src/main/assetIpc.ts')
+const assetScanner = read('src/main/assetScanner.ts')
+const assetPreview = read('src/main/assetPreview.ts')
 const preload = read('src/preload/index.ts')
 const app = read('src/renderer/src/App.tsx')
-const previewStage = read('src/renderer/src/components/PreviewStage.tsx')
-const sidebarComponent = read('src/renderer/src/components/Sidebar.tsx')
-const clipGridComponent = read('src/renderer/src/components/ClipGrid.tsx')
-const contextMenuComponent = read('src/renderer/src/components/ContextMenu.tsx')
+const grid = read('src/renderer/src/components/AssetGrid.tsx')
+const sidebar = read('src/renderer/src/components/AssetSidebar.tsx')
+const inspector = read('src/renderer/src/components/AssetInspector.tsx')
+const quickLook = read('src/renderer/src/components/QuickLook.tsx')
 const html = read('src/renderer/index.html')
 const builder = read('electron-builder.yml')
+const design = read('DESIGN.md')
 const readme = read('README.md')
 
-const supportedExtensions = [
-  '.mp4',
-  '.mov',
-  '.mxf',
-  '.mkv',
-  '.avi',
-  '.webm',
-  '.m4v',
-  '.mpg',
-  '.mpeg',
-  '.ts',
-  '.mts',
-  '.m2ts'
-]
-
-test('package exposes runnable MVP scripts and bundled media tooling', () => {
+test('package exposes the app lifecycle, bundled media tools, virtualization, and local fonts', () => {
   assert.equal(packageJson.scripts.dev, 'electron-vite dev')
   assert.equal(packageJson.scripts.build, 'npm run typecheck && electron-vite build')
-  assert.equal(packageJson.scripts.typecheck, 'npm run typecheck:node && npm run typecheck:web')
-  assert.equal(packageJson.scripts['test:mvp'], 'node --test test/mvp-contract.test.mjs')
-  assert.ok(packageJson.dependencies['ffmpeg-static'])
-  assert.ok(packageJson.dependencies['ffprobe-static'])
-  assert.doesNotMatch(
-    JSON.stringify(packageJson),
-    /electron-updater|example\.com|electron-vite\.org/
-  )
+  for (const dependency of [
+    'ffmpeg-static',
+    'ffprobe-static',
+    '@tanstack/react-virtual',
+    '@fontsource/ibm-plex-sans',
+    '@fontsource/ibm-plex-mono'
+  ]) {
+    assert.ok(packageJson.dependencies[dependency])
+  }
+  assert.doesNotMatch(JSON.stringify(packageJson), /electron-updater|telemetry|sentry/i)
 })
 
-test('Electron window stays hardened and assets use a constrained custom protocol', () => {
+test('Electron window stays hardened and local media uses a constrained protocol', () => {
   assert.match(main, /contextIsolation:\s*true/)
   assert.match(main, /nodeIntegration:\s*false/)
   assert.match(main, /sandbox:\s*true/)
   assert.match(main, /webSecurity:\s*true/)
-  assert.match(main, /protocol\.registerSchemesAsPrivileged/)
   assert.match(main, /protocol\.handle\('clipdock-media'/)
   assert.match(html, /img-src[^;]*clipdock-media:/)
   assert.match(html, /media-src[^;]*clipdock-media:/)
 })
 
-test('shared contract covers the requested ClipDock MVP features', () => {
-  for (const extension of supportedExtensions) {
-    assert.match(shared, new RegExp(`['"\`]${extension.replace('.', '\\.')}['"\`]`))
+test('public contract is asset-first and covers video, audio, pagination, jobs, and recovery', () => {
+  for (const extension of [
+    '.mp4',
+    '.mov',
+    '.m4v',
+    '.mkv',
+    '.avi',
+    '.webm',
+    '.mpg',
+    '.mpeg',
+    '.ts',
+    '.mts',
+    '.m2ts',
+    '.wav',
+    '.mp3',
+    '.aac',
+    '.m4a',
+    '.flac',
+    '.ogg'
+  ]) {
+    assert.match(shared, new RegExp(extension.replace('.', '\\.')))
   }
-
   for (const surface of [
-    'durationMs',
-    'widthPixels',
-    'heightPixels',
-    'fps',
-    'codec',
-    'thumbnailUrl',
-    'previewUrl',
-    'favorite',
-    'tags',
-    'note',
-    'ScanEvent',
-    'ClipDragRequest',
-    'LibraryBinRecordSummary',
-    'ClipRotationDegrees',
-    'binIds',
-    'rotationDegrees',
-    'bins',
-    'createBin',
-    'renameBin',
-    'deleteBin',
-    'addClipsToBin',
-    'moveClipsToBin',
-    'removeClipsFromBin',
-    'removeClipsFromLibrary',
-    'updateClipRotation',
-    'prepareClipDrag'
-  ]) {
+    'AssetKind',
+    'AssetMediaType',
+    'OverlayMode',
+    'CompatibilityLevel',
+    'AssetSummary',
+    'AssetQuery',
+    'AssetPage',
+    'getNavigationSnapshot',
+    'queryAssets',
+    'addPackFolder',
+    'relinkPack',
+    'rescanPacks',
+    'updateAssets',
+    'toggleAssetFavorite',
+    'createCollection',
+    'regeneratePreviews',
+    'prepareAssetDrag',
+    'startAssetDrag',
+    'onAssetJobEvent'
+  ])
     assert.match(shared, new RegExp(`\\b${surface}\\b`))
-  }
 })
 
-test('SQLite store persists folders, clips, tags, marks, metadata, thumbnails, and FTS', () => {
-  for (const table of ['library_sources', 'clips', 'tags', 'clip_tags', 'clip_marks']) {
-    assert.match(store, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
-  }
-
-  for (const table of ['bins', 'clip_bins', 'clip_exports']) {
-    assert.match(store, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
-  }
-
-  for (const field of [
-    'duration_ms',
-    'width_pixels',
-    'height_pixels',
-    'fps',
-    'codec',
-    'thumbnail_path',
-    'favorite',
-    'note',
-    'rotation_degrees',
-    'binIds',
-    'rotationDegrees'
+test('SQLite asset store contains migration, FTS, pagination, collections, and persistent preview jobs', () => {
+  for (const table of [
+    'asset_packs',
+    'assets',
+    'asset_tags',
+    'collections',
+    'collection_assets',
+    'preview_jobs',
+    'app_settings'
   ]) {
-    assert.match(store, new RegExp(`\\b${field}\\b`))
+    assert.match(assetStore, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
   }
-
-  assert.match(store, /CREATE VIRTUAL TABLE IF NOT EXISTS clip_search\s+USING fts5/)
-  assert.match(store, /updateClipTags/)
-  assert.match(store, /updateClipNote/)
-  assert.match(store, /toggleFavorite/)
+  assert.match(assetStore, /CREATE VIRTUAL TABLE IF NOT EXISTS asset_search\s+USING fts5/)
+  assert.match(assetStore, /asset_search MATCH \?/)
+  assert.match(assetStore, /BEGIN IMMEDIATE/)
+  assert.match(assetStore, /migrateLegacy/)
+  assert.match(assetStore, /Math\.min\(200, Math\.max\(1, query\.limit/)
+  assert.match(assetStore, /resetRunningJobs/)
+  assert.match(assetStore, /relinkPack/)
 })
 
-test('main process owns dialogs, scanning, thumbnailing, reveal, clipboard, and native drag', () => {
-  assert.match(ipc, /showOpenDialog/)
-  assert.match(ipc, /openDirectory/)
-  assert.match(ipc, /multiSelections/)
-  assert.match(ipc, /scanLibrary/)
-  assert.match(ipc, /thumbnailCacheDir/)
-  assert.match(ipc, /shell\.showItemInFolder/)
-  assert.match(ipc, /clipboard\.writeText/)
-  assert.match(ipc, /sender\.startDrag/)
-  assert.match(ipc, /validateClipFile/)
-  assert.match(ipc, /resolveRotatedExportPath/)
-  assert.match(ipc, /exportCacheDir/)
-  assert.match(ipc, /PREPARE_CLIP_DRAG_CHANNEL/)
-  assert.match(ipc, /START_CLIP_DRAG_CHANNEL/)
-  assert.match(ipc, /resolvePreparedDragFile/)
-  assert.match(ipc, /statSync/)
-  assert.match(ipc, /function startClipDrag\(/)
-  assert.doesNotMatch(ipc, /async function startClipDrag\(/)
-  assert.match(app, /event\.preventDefault\(\)\s*event\.dataTransfer[\s\S]*api\.startClipDrag/)
+test('scanner accepts only media and classifies transition, overlay, and sound paths', () => {
+  assert.match(assetScanner, /SUPPORTED_VIDEO_EXTENSIONS/)
+  assert.match(assetScanner, /SUPPORTED_AUDIO_EXTENSIONS/)
+  for (const term of [
+    'transition',
+    'wipe',
+    'intro',
+    'overlay',
+    'leak',
+    'grain',
+    'particle',
+    'dust'
+  ])
+    assert.match(assetScanner, new RegExp(term))
+  assert.match(assetScanner, /mediaType === 'audio'\) return 'sound'/)
+  assert.match(assetScanner, /metadata\.hasAlpha \? 'alpha' : 'raw'/)
 })
 
-test('preload exposes only the typed clipdock bridge and no raw node/electron API', () => {
+test('main and preload own native drag, relink, jobs, and expose no raw Node bridge', () => {
+  for (const surface of [
+    'showOpenDialog',
+    'openDirectory',
+    'scanAssetPack',
+    'generateAssetPreview',
+    'shell.showItemInFolder',
+    'sender.startDrag',
+    'statSync',
+    'RELINK_PACK_CHANNEL'
+  ]) {
+    assert.match(assetIpc, new RegExp(surface.replace('.', '\\.')))
+  }
+  assert.match(assetIpc, /claimPreviewJobs\(2\)/)
+  assert.match(assetPreview, /Demo|color=c=0x1d3a4f/)
+  assert.match(assetPreview, /blend=all_mode=screen/)
+  assert.match(assetPreview, /showwavespic/)
+  assert.match(assetPreview, /PREVIEW_PIPELINE_VERSION/)
+  assert.match(assetPreview, /thumbnail\.webp/)
   assert.match(preload, /contextBridge\.exposeInMainWorld\('clipdock'/)
   assert.doesNotMatch(preload, /exposeInMainWorld\('(?:electron|api)'/)
-  assert.match(preload, /getLibrarySnapshot/)
-  assert.match(preload, /addLinkedFolder/)
-  assert.match(preload, /rescanLibrary/)
-  assert.match(preload, /toggleFavorite/)
-  assert.match(preload, /updateClipTags/)
-  assert.match(preload, /updateClipNote/)
-  assert.match(preload, /startClipDrag/)
-  for (const method of [
-    'createBin',
-    'renameBin',
-    'deleteBin',
-    'addClipsToBin',
-    'moveClipsToBin',
-    'removeClipsFromBin',
-    'removeClipsFromLibrary',
-    'updateClipRotation',
-    'prepareClipDrag'
-  ]) {
+  for (const method of ['queryAssets', 'relinkPack', 'regeneratePreviews', 'startAssetDrag'])
     assert.match(preload, new RegExp(`\\b${method}\\b`))
-  }
 })
 
-test('renderer implements the main visual workflow without direct Node access', () => {
-  const rendererSurface = [
-    app,
-    previewStage,
-    sidebarComponent,
-    clipGridComponent,
-    contextMenuComponent
-  ].join('\n')
-
-  for (const forbidden of [/from ['"`]electron['"`]/, /from ['"`]node:/, /\bipcRenderer\b/]) {
-    assert.doesNotMatch(rendererSurface, forbidden)
-  }
-
+test('renderer is library-first, virtualized, keyboard accessible, and isolated from Node', () => {
+  const renderer = [app, grid, sidebar, inspector, quickLook].join('\n')
+  for (const forbidden of [/from ['"`]electron['"`]/, /from ['"`]node:/, /\bipcRenderer\b/])
+    assert.doesNotMatch(renderer, forbidden)
   for (const surface of [
-    'ClipGrid',
-    'ClipCard',
-    'PreviewStage',
-    'ContextMenu',
-    'TagEditor',
+    'useVirtualizer',
+    'AssetGrid',
+    'AssetInspector',
+    'AssetSidebar',
+    'QuickLook',
+    'startAssetDrag',
     'onDragStart',
-    'onDragClip',
-    'Drag preview to timeline',
     'onDrop',
-    'startClipDrag',
-    'prepareClipDrag',
-    'previewUrl',
-    'rotationDegrees',
-    'Bins',
-    'Add Bin',
-    'Remove from ClipDock',
-    'Search filename, path, tags, notes',
-    'Reveal in Explorer',
-    'Copy Path'
+    "event.key === '/'",
+    "event.key === ' '",
+    'ctrlKey',
+    'shiftKey',
+    'toggleAssetFavorite'
   ]) {
-    assert.match(rendererSurface, new RegExp(surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.match(renderer, new RegExp(surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   }
+  assert.match(grid, /slice\(-3\)/)
+  assert.match(app, /setTimeout\(\(\) => setDebouncedSearch\(search\), 150\)/)
 })
 
-test('packaging and README describe local-only installation, build, workflow, and limitations', () => {
+test('documentation defines the media-only product and cinematic utility design system', () => {
+  for (const phrase of [
+    'transition clips',
+    'video overlays',
+    'sound effects',
+    'never moved, modified, or deleted',
+    'DaVinci Resolve',
+    'Adobe Premiere Pro'
+  ])
+    assert.match(readme, new RegExp(phrase, 'i'))
+  for (const token of [
+    '#0B0D10',
+    '#15191F',
+    '#2A313B',
+    '#F2F5F7',
+    '#8F9AA8',
+    '#55C2FF',
+    '#F6C85F',
+    '#FF6B7A',
+    'IBM Plex Sans',
+    'IBM Plex Mono'
+  ])
+    assert.match(design, new RegExp(token, 'i'))
   assert.match(builder, /node_modules\/ffmpeg-static/)
   assert.match(builder, /node_modules\/ffprobe-static/)
   assert.match(builder, /publish:\s*null/)
-
-  for (const phrase of [
-    'npm install',
-    'npm run dev',
-    'npm run build',
-    'DaVinci Resolve',
-    'Add Folder',
-    'drag',
-    'Known limitations',
-    'Future roadmap',
-    'No cloud',
-    'No accounts',
-    'No telemetry'
-  ]) {
-    assert.match(readme, new RegExp(phrase, 'i'))
-  }
 })
+
+function createIdGenerator(prefix = 'id') {
+  let id = 0
+  return () => `${prefix}-${String(++id).padStart(5, '0')}`
+}
 
 function compileRuntimeModules() {
   const scratchParent = join(projectRoot, 'tmp')
-
   mkdirSync(scratchParent, { recursive: true })
-
-  const scratchRoot = mkdtempSync(join(scratchParent, 'clipdock-mvp-ts-'))
+  const scratchRoot = mkdtempSync(join(scratchParent, 'clipdock-2-ts-'))
   const outDir = join(scratchRoot, 'compiled')
-  const tsconfigFile = join(scratchRoot, 'tsconfig.mvp.json')
-  const tscBin = join(projectRoot, 'node_modules', 'typescript', 'bin', 'tsc')
-
-  assert.ok(existsSync(tscBin), 'Run npm install before npm run test:mvp')
+  const tsconfig = join(scratchRoot, 'tsconfig.json')
+  const tsc = join(projectRoot, 'node_modules', 'typescript', 'bin', 'tsc')
   writeFileSync(
-    tsconfigFile,
-    JSON.stringify(
-      {
-        compilerOptions: {
-          target: 'ES2022',
-          module: 'CommonJS',
-          moduleResolution: 'Node',
-          rootDir: projectRoot,
-          outDir,
-          strict: true,
-          esModuleInterop: true,
-          skipLibCheck: false,
-          noEmitOnError: true,
-          types: ['node'],
-          typeRoots: [join(projectRoot, 'node_modules', '@types')]
-        },
-        include: [
-          join(projectRoot, 'src', 'main', 'libraryStore.ts'),
-          join(projectRoot, 'src', 'main', 'rotatedExport.ts'),
-          join(projectRoot, 'src', 'main', 'libraryScanner.ts'),
-          join(projectRoot, 'src', 'main', 'mediaProbe.ts'),
-          join(projectRoot, 'src', 'main', 'thumbnailer.ts'),
-          join(projectRoot, 'src', 'shared', 'clipdock.ts')
-        ]
+    tsconfig,
+    JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'CommonJS',
+        moduleResolution: 'Node',
+        rootDir: projectRoot,
+        outDir,
+        strict: true,
+        esModuleInterop: true,
+        skipLibCheck: false,
+        noEmitOnError: true,
+        types: ['node'],
+        typeRoots: [join(projectRoot, 'node_modules', '@types')]
       },
-      null,
-      2
-    )
+      include: [
+        join(projectRoot, 'src/main/libraryStore.ts'),
+        join(projectRoot, 'src/main/assetStore.ts'),
+        join(projectRoot, 'src/main/assetScanner.ts'),
+        join(projectRoot, 'src/main/assetPreview.ts'),
+        join(projectRoot, 'src/main/mediaProbe.ts'),
+        join(projectRoot, 'src/main/thumbnailer.ts'),
+        join(projectRoot, 'src/shared/clipdock.ts')
+      ]
+    })
   )
-
-  const result = spawnSync(process.execPath, [tscBin, '-p', tsconfigFile], {
+  const result = spawnSync(process.execPath, [tsc, '-p', tsconfig], {
     cwd: projectRoot,
     encoding: 'utf8'
   })
-
-  assert.equal(
-    result.status,
-    0,
-    `MVP temp TypeScript compile failed\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`
-  )
-
-  const requireFromCompiled = createRequire(join(outDir, 'src', 'main', 'libraryStore.js'))
-
+  assert.equal(result.status, 0, `Runtime compile failed\n${result.stdout}\n${result.stderr}`)
+  const requireCompiled = createRequire(join(outDir, 'src/main/assetStore.js'))
   return {
     scratchRoot,
-    storeModule: requireFromCompiled(join(outDir, 'src', 'main', 'libraryStore.js')),
-    rotatedExportModule: requireFromCompiled(join(outDir, 'src', 'main', 'rotatedExport.js')),
-    scannerModule: requireFromCompiled(join(outDir, 'src', 'main', 'libraryScanner.js'))
+    assetStore: requireCompiled(join(outDir, 'src/main/assetStore.js')),
+    scanner: requireCompiled(join(outDir, 'src/main/assetScanner.js')),
+    preview: requireCompiled(join(outDir, 'src/main/assetPreview.js')),
+    legacyStore: requireCompiled(join(outDir, 'src/main/libraryStore.js'))
   }
 }
 
-function createIdGenerator() {
-  let nextId = 0
-
-  return () => `id-${String(++nextId).padStart(3, '0')}`
+function scannedAsset(packId, filePath, kind = 'transition') {
+  return {
+    packId,
+    filePath,
+    kind,
+    mediaType: 'video',
+    overlayMode: 'raw',
+    compatibility: 'expected',
+    sizeBytes: 10,
+    modifiedAtMs: 100,
+    durationMs: 1000,
+    widthPixels: 1920,
+    heightPixels: 1080,
+    fps: 30,
+    codec: 'h264',
+    audioCodec: null,
+    sampleRate: null,
+    channels: null,
+    hasAlpha: false,
+    metadataJson: null
+  }
 }
 
-test('runtime scanner imports a real local video with metadata, thumbnail, tags, notes, and favorite state', async () => {
+test('asset store migrates legacy metadata, clamps pages, and preserves IDs while relinking', () => {
   const runtime = compileRuntimeModules()
-  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-mvp-runtime-'))
-  const mediaDir = join(workspace, 'media')
-  const thumbnailDir = join(workspace, 'thumbs')
-  const databaseFile = join(workspace, 'db', 'library.sqlite')
-  const managedDir = join(workspace, 'managed')
-  const videoFile = join(mediaDir, 'sample.mp4')
-  const requireFromProject = createRequire(join(projectRoot, 'package.json'))
-  const ffmpegPath = requireFromProject('ffmpeg-static')
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-store-'))
+  const firstRoot = join(workspace, 'Old Pack')
+  const nextRoot = join(workspace, 'New Pack')
+  const managed = join(workspace, 'managed')
+  const source = join(firstRoot, 'Transitions', 'wipe.mp4')
+  const managedFile = join(managed, 'wipe.mp4')
+  const databaseFile = join(workspace, 'library.sqlite')
   let store
-
   try {
-    mkdirSync(mediaDir, { recursive: true })
-    mkdirSync(thumbnailDir, { recursive: true })
-    mkdirSync(managedDir, { recursive: true })
+    mkdirSync(join(firstRoot, 'Transitions'), { recursive: true })
+    mkdirSync(join(nextRoot, 'Transitions'), { recursive: true })
+    mkdirSync(managed, { recursive: true })
+    writeFileSync(source, 'video')
+    writeFileSync(managedFile, 'video')
 
+    const legacy = runtime.legacyStore.openLibraryStore({
+      databaseFile,
+      libraryDir: managed,
+      createId: createIdGenerator(),
+      now: () => 100
+    }).value
+    const copied = legacy.createCopiedClipRecord({ sourceFile: source, managedFile })
+    const clipId = copied.value.clip.id
+    legacy.toggleFavorite(clipId)
+    legacy.updateClipTags(clipId, ['fast', 'wipe'])
+    legacy.updateClipNote(clipId, 'Between two clips')
+    const collectionSnapshot = legacy.createBin('Hero effects')
+    legacy.addClipsToBin([clipId], collectionSnapshot.value.bins[0].id)
+    legacy.close()
+
+    store = runtime.assetStore.openAssetStore({
+      databaseFile,
+      previewCacheDir: join(workspace, 'previews'),
+      createId: createIdGenerator('asset'),
+      now: () => 200
+    }).value
+    const migrated = store.queryAssets({ search: 'wipe' })
+    assert.equal(migrated.value.totalCount, 1)
+    assert.equal(migrated.value.items[0].favorite, true)
+    assert.deepEqual(migrated.value.items[0].tags, ['fast', 'wipe'])
+    assert.equal(migrated.value.items[0].note, 'Between two clips')
+    assert.equal(store.queryAssets({ search: 'between' }).value.totalCount, 1)
+    assert.equal(store.queryAssets({ search: 'fast' }).value.totalCount, 1)
+    assert.equal(store.navigation().value.collections[0].name, 'Hero effects')
+
+    const createdPack = store.createPack(firstRoot)
+    assert.equal(createdPack.ok, true, createdPack.error?.message)
+    const packId = createdPack.value
+    const saved = store.upsertScannedAsset(scannedAsset(packId, source))
+    copyFileSync(source, join(nextRoot, 'Transitions', 'wipe.mp4'))
+    const relinked = store.relinkPack(packId, nextRoot)
+    assert.equal(relinked.ok, true, relinked.error?.message)
+    assert.equal(
+      store.getAssetPath(saved.value.id).value.filePath,
+      join(nextRoot, 'Transitions', 'wipe.mp4')
+    )
+
+    for (let index = 0; index < 205; index += 1)
+      store.upsertScannedAsset(
+        scannedAsset(packId, join(nextRoot, `item-${String(index).padStart(3, '0')}.mp4`))
+      )
+    const firstPage = store.queryAssets({ limit: 500, sort: 'name' })
+    assert.equal(firstPage.value.items.length, 200)
+    assert.ok(firstPage.value.nextCursor)
+    const secondPage = store.queryAssets({
+      limit: 200,
+      cursor: firstPage.value.nextCursor,
+      sort: 'name'
+    })
+    assert.ok(secondPage.value.items.length > 0)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      // Preserve the primary assertion failure.
+    }
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(runtime.scratchRoot, { recursive: true, force: true })
+  }
+})
+
+test('real mixed-media pack scan classifies assets, ignores unsupported files, and builds context previews', async () => {
+  const runtime = compileRuntimeModules()
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-scan-'))
+  const packRoot = join(workspace, 'Creator Pack')
+  const transitions = join(packRoot, 'Transitions')
+  const overlays = join(packRoot, 'Dust Overlays')
+  const sounds = join(packRoot, 'SFX')
+  const video = join(transitions, 'wipe-fast.mp4')
+  const overlay = join(overlays, 'dust.mp4')
+  const audio = join(sounds, 'impact.wav')
+  const previewDir = join(workspace, 'previews')
+  const requireProject = createRequire(join(projectRoot, 'package.json'))
+  const ffmpeg = requireProject('ffmpeg-static')
+  let store
+  try {
+    mkdirSync(transitions, { recursive: true })
+    mkdirSync(overlays, { recursive: true })
+    mkdirSync(sounds, { recursive: true })
     const videoResult = spawnSync(
-      ffmpegPath,
+      ffmpeg,
       [
         '-y',
         '-f',
@@ -336,411 +410,71 @@ test('runtime scanner imports a real local video with metadata, thumbnail, tags,
         '-i',
         'testsrc=size=160x90:rate=24',
         '-t',
-        '1',
+        '0.6',
         '-pix_fmt',
         'yuv420p',
-        videoFile
+        video
       ],
-      { cwd: projectRoot, encoding: 'utf8' }
+      { encoding: 'utf8' }
     )
-
-    assert.equal(
-      videoResult.status,
-      0,
-      `Fixture video generation failed\nSTDOUT:\n${videoResult.stdout}\nSTDERR:\n${videoResult.stderr}`
-    )
-
-    store = runtime.storeModule.openLibraryStore({
-      databaseFile,
-      libraryDir: managedDir,
-      now: () => 1_800_000_000_000,
-      createId: createIdGenerator()
-    }).value
-
-    const linked = store.createLinkedFolderRecord({ folder: mediaDir })
-
-    assert.equal(linked.ok, true)
-
-    const scan = await runtime.scannerModule.scanLibrary({
-      store,
-      thumbnailCacheDir: thumbnailDir,
-      now: () => 1_800_000_000_000
-    })
-
-    assert.equal(scan.summary.totalFiles, 1)
-    assert.equal(scan.summary.importedClips, 1)
-    assert.equal(scan.snapshot.clips.length, 1)
-
-    const clip = scan.snapshot.clips[0]
-
-    assert.equal(clip.displayName, 'sample.mp4')
-    assert.equal(clip.extension, '.mp4')
-    assert.equal(clip.widthPixels, 160)
-    assert.equal(clip.heightPixels, 90)
-    assert.ok(clip.durationMs >= 900)
-    assert.ok(clip.fps >= 23)
-    assert.equal(typeof clip.codec, 'string')
-    assert.ok(clip.thumbnailUrl.startsWith('clipdock-media://thumbnail/'))
-
-    const thumbnailPath = store.getClipAsset(clip.id, 'thumbnail')
-
-    assert.equal(thumbnailPath.ok, true)
-    assert.ok(existsSync(thumbnailPath.value))
-
-    const tagged = store.updateClipTags(clip.id, ['overlay', 'Resolve'])
-
-    assert.equal(tagged.ok, true)
-    assert.deepEqual(tagged.value.clips[0].tags, ['overlay', 'Resolve'])
-
-    const noted = store.updateClipNote(clip.id, 'usable intro texture')
-
-    assert.equal(noted.ok, true)
-    assert.equal(noted.value.clips[0].note, 'usable intro texture')
-
-    const favorited = store.toggleFavorite(clip.id)
-
-    assert.equal(favorited.ok, true)
-    assert.equal(favorited.value.clips[0].favorite, true)
-    assert.equal(store.close().ok, true)
-  } finally {
-    try {
-      store?.close()
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-
-    try {
-      rmSync(workspace, { recursive: true, force: true })
-    } catch {
-      // SQLite can briefly hold a WAL handle on Windows after close.
-    }
-
-    rmSync(runtime.scratchRoot, { recursive: true, force: true })
-  }
-})
-
-test('library store creates bins and assigns one clip to multiple bins', async () => {
-  const runtime = compileRuntimeModules()
-  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-bins-runtime-'))
-  const mediaDir = join(workspace, 'media')
-  const managedDir = join(workspace, 'managed')
-  const databaseFile = join(workspace, 'db', 'library.sqlite')
-  const sourceFile = join(mediaDir, 'sample.mp4')
-  const managedFile = join(managedDir, 'sample.mp4')
-  let store
-
-  try {
-    mkdirSync(mediaDir, { recursive: true })
-    mkdirSync(managedDir, { recursive: true })
-    writeFileSync(sourceFile, 'store-only source video')
-    writeFileSync(managedFile, 'store-only managed video')
-
-    store = runtime.storeModule.openLibraryStore({
-      databaseFile,
-      libraryDir: managedDir,
-      now: () => 1_800_000_000_000,
-      createId: createIdGenerator()
-    }).value
-
-    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
-
-    assert.equal(copied.ok, true)
-
-    const clipId = copied.value.clip.id
-    const first = store.createBin('B-Roll')
-    const second = store.createBin('Social')
-
-    assert.equal(first.ok, true)
-    assert.equal(second.ok, true)
-
-    const firstBinId = first.value.bins.find((bin) => bin.name === 'B-Roll').id
-    const secondBinId = second.value.bins.find((bin) => bin.name === 'Social').id
-    const assignedFirst = store.addClipsToBin([clipId], firstBinId)
-    const assignedSecond = store.addClipsToBin([clipId], secondBinId)
-
-    assert.equal(assignedFirst.ok, true)
-    assert.equal(assignedSecond.ok, true)
-
-    const snapshot = store.snapshot()
-
-    assert.equal(snapshot.ok, true)
-    const expectedBinIds = snapshot.value.bins.map((bin) => bin.id).sort()
-
-    assert.deepEqual([...snapshot.value.clips[0].binIds].sort(), expectedBinIds)
-    assert.equal(snapshot.value.bins[0].clipCount, 1)
-    assert.equal(snapshot.value.bins[1].clipCount, 1)
-    assert.equal(store.close().ok, true)
-  } finally {
-    try {
-      store?.close()
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-
-    try {
-      rmSync(workspace, { recursive: true, force: true })
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-  }
-})
-
-test('library store removes clips from ClipDock and stores valid rotations only', async () => {
-  const runtime = compileRuntimeModules()
-  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-rotation-runtime-'))
-  const mediaDir = join(workspace, 'media')
-  const managedDir = join(workspace, 'managed')
-  const databaseFile = join(workspace, 'db', 'library.sqlite')
-  const sourceFile = join(mediaDir, 'sample.mp4')
-  const managedFile = join(managedDir, 'sample.mp4')
-  let store
-
-  try {
-    mkdirSync(mediaDir, { recursive: true })
-    mkdirSync(managedDir, { recursive: true })
-    writeFileSync(sourceFile, 'store-only source video')
-    writeFileSync(managedFile, 'store-only managed video')
-
-    store = runtime.storeModule.openLibraryStore({
-      databaseFile,
-      libraryDir: managedDir,
-      now: () => 1_800_000_000_000,
-      createId: createIdGenerator()
-    }).value
-
-    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
-
-    assert.equal(copied.ok, true)
-
-    const clipId = copied.value.clip.id
-    const rotated = store.updateClipRotation(clipId, 90)
-
-    assert.equal(rotated.ok, true)
-    assert.equal(rotated.value.clips[0].rotationDegrees, 90)
-
-    const invalid = store.updateClipRotation(clipId, 45)
-
-    assert.equal(invalid.ok, false)
-    assert.equal(invalid.error.code, 'LIBRARY_INVALID_INPUT')
-
-    const removed = store.removeClipsFromLibrary([clipId])
-
-    assert.equal(removed.ok, true)
-    assert.equal(removed.value.clips.length, 0)
-    assert.equal(existsSync(sourceFile), true)
-    assert.equal(existsSync(managedFile), true)
-    assert.equal(store.close().ok, true)
-  } finally {
-    try {
-      store?.close()
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-
-    try {
-      rmSync(workspace, { recursive: true, force: true })
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-  }
-})
-
-test('library store reuses and invalidates rotation export cache records by source freshness', async () => {
-  const runtime = compileRuntimeModules()
-  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-export-cache-runtime-'))
-  const mediaDir = join(workspace, 'media')
-  const managedDir = join(workspace, 'managed')
-  const exportDir = join(workspace, 'exports')
-  const databaseFile = join(workspace, 'db', 'library.sqlite')
-  const sourceFile = join(mediaDir, 'sample.mp4')
-  const managedFile = join(managedDir, 'sample.mp4')
-  const exportFile = join(exportDir, 'rot90.mp4')
-  let store
-
-  try {
-    mkdirSync(mediaDir, { recursive: true })
-    mkdirSync(managedDir, { recursive: true })
-    mkdirSync(exportDir, { recursive: true })
-    writeFileSync(sourceFile, 'store-only source video')
-    writeFileSync(managedFile, 'store-only managed video')
-    writeFileSync(exportFile, 'store-only rotated export')
-
-    store = runtime.storeModule.openLibraryStore({
-      databaseFile,
-      libraryDir: managedDir,
-      now: () => 1_800_000_000_000,
-      createId: createIdGenerator()
-    }).value
-
-    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
-
-    assert.equal(copied.ok, true)
-
-    const clipId = copied.value.clip.id
-    const saved = store.upsertClipRotationExport({
-      clipId,
-      rotationDegrees: 90,
-      sourceSizeBytes: 24,
-      sourceModifiedAtMs: 100,
-      exportPath: exportFile
-    })
-
-    assert.equal(saved.ok, true)
-    assert.equal(saved.value.exportPath, exportFile)
-
-    const reused = store.getClipRotationExport({
-      clipId,
-      rotationDegrees: 90,
-      sourceSizeBytes: 24,
-      sourceModifiedAtMs: 100
-    })
-
-    assert.equal(reused.ok, true)
-    assert.equal(reused.value.exportPath, exportFile)
-
-    const stale = store.getClipRotationExport({
-      clipId,
-      rotationDegrees: 90,
-      sourceSizeBytes: 25,
-      sourceModifiedAtMs: 100
-    })
-
-    assert.equal(stale.ok, true)
-    assert.equal(stale.value, null)
-    assert.equal(store.close().ok, true)
-  } finally {
-    try {
-      store?.close()
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-
-    try {
-      rmSync(workspace, { recursive: true, force: true })
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-  }
-})
-
-test('rotated drag export resolver can fail fast instead of rendering during drag', async () => {
-  const runtime = compileRuntimeModules()
-  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-drag-export-runtime-'))
-  const mediaDir = join(workspace, 'media')
-  const managedDir = join(workspace, 'managed')
-  const exportDir = join(workspace, 'exports')
-  const databaseFile = join(workspace, 'db', 'library.sqlite')
-  const sourceFile = join(mediaDir, 'sample.mp4')
-  const managedFile = join(managedDir, 'sample.mp4')
-  const exportFile = join(exportDir, 'rot90-ready.mp4')
-  let store
-
-  try {
-    mkdirSync(mediaDir, { recursive: true })
-    mkdirSync(managedDir, { recursive: true })
-    mkdirSync(exportDir, { recursive: true })
-    writeFileSync(sourceFile, 'store-only source video')
-    writeFileSync(managedFile, 'store-only managed video')
-
-    store = runtime.storeModule.openLibraryStore({
-      databaseFile,
-      libraryDir: managedDir,
-      now: () => 1_800_000_000_000,
-      createId: createIdGenerator()
-    }).value
-
-    const copied = store.createCopiedClipRecord({ sourceFile, managedFile })
-
-    assert.equal(copied.ok, true)
-
-    const input = {
-      store,
-      clipId: copied.value.clip.id,
-      sourcePath: managedFile,
-      sourceSizeBytes: 24,
-      sourceModifiedAtMs: 100,
-      rotationDegrees: 90,
-      exportCacheDir: exportDir,
-      renderIfMissing: false
-    }
-
-    const notPrepared = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
-
-    assert.equal(notPrepared.ok, false)
-    assert.equal(notPrepared.error.code, 'CLIP_EXPORT_FAILED')
-    assert.match(notPrepared.error.message, /not ready/i)
-
-    writeFileSync(exportFile, 'store-only corrupt rotated export')
-    const corruptSaved = store.upsertClipRotationExport({
-      clipId: copied.value.clip.id,
-      rotationDegrees: 90,
-      sourceSizeBytes: 24,
-      sourceModifiedAtMs: 100,
-      exportPath: exportFile
-    })
-
-    assert.equal(corruptSaved.ok, true)
-
-    const corrupt = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
-
-    assert.equal(corrupt.ok, false)
-    assert.equal(corrupt.error.code, 'CLIP_EXPORT_FAILED')
-    assert.match(corrupt.error.message, /invalid/i)
-    assert.equal(existsSync(exportFile), false)
-
-    const requireFromProject = createRequire(join(projectRoot, 'package.json'))
-    const ffmpegPath = requireFromProject('ffmpeg-static')
-    const exportResult = spawnSync(
-      ffmpegPath,
+    assert.equal(videoResult.status, 0, videoResult.stderr)
+    copyFileSync(video, overlay)
+    const audioResult = spawnSync(
+      ffmpeg,
       [
         '-y',
         '-f',
         'lavfi',
         '-i',
-        'testsrc=size=64x36:rate=5',
+        'sine=frequency=880:sample_rate=48000',
         '-t',
-        '0.2',
-        '-pix_fmt',
-        'yuv420p',
-        exportFile
+        '0.4',
+        '-c:a',
+        'pcm_s16le',
+        audio
       ],
-      { cwd: projectRoot, encoding: 'utf8' }
+      { encoding: 'utf8' }
     )
+    assert.equal(audioResult.status, 0, audioResult.stderr)
+    writeFileSync(join(packRoot, 'preset.mogrt'), 'ignored')
+    writeFileSync(join(packRoot, 'readme.txt'), 'ignored')
 
-    assert.equal(
-      exportResult.status,
-      0,
-      `Fixture export generation failed\nSTDOUT:\n${exportResult.stdout}\nSTDERR:\n${exportResult.stderr}`
-    )
+    store = runtime.assetStore.openAssetStore({
+      databaseFile: join(workspace, 'library.sqlite'),
+      previewCacheDir: previewDir,
+      createId: createIdGenerator()
+    }).value
+    const packId = store.createPack(packRoot).value
+    const pack = store.listPacks([packId]).value[0]
+    const result = await runtime.scanner.scanAssetPack(store, pack)
+    assert.equal(result.scannedFiles, 3)
+    assert.equal(result.importedAssets, 3)
+    const queried = store.queryAssets({ limit: 200 })
+    assert.equal(queried.ok, true, queried.error?.message)
+    const page = queried.value
+    assert.deepEqual(page.items.map((asset) => asset.kind).sort(), [
+      'overlay',
+      'sound',
+      'transition'
+    ])
+    const transition = page.items.find((asset) => asset.kind === 'transition')
+    const sound = page.items.find((asset) => asset.kind === 'sound')
+    assert.equal(transition.widthPixels, 160)
+    assert.equal(sound.sampleRate, 48000)
 
-    const validSaved = store.upsertClipRotationExport({
-      clipId: copied.value.clip.id,
-      rotationDegrees: 90,
-      sourceSizeBytes: 24,
-      sourceModifiedAtMs: 100,
-      exportPath: exportFile
-    })
-
-    assert.equal(validSaved.ok, true)
-
-    const prepared = await runtime.rotatedExportModule.resolveRotatedExportPath(input)
-
-    assert.equal(prepared.ok, true)
-    assert.equal(prepared.value, exportFile)
-    assert.equal(store.close().ok, true)
+    const transitionPreview = await runtime.preview.generateAssetPreview(transition, previewDir)
+    const soundPreview = await runtime.preview.generateAssetPreview(sound, previewDir)
+    assert.ok(existsSync(transitionPreview.previewPath))
+    assert.ok(existsSync(transitionPreview.thumbnailPath))
+    assert.ok(existsSync(soundPreview.thumbnailPath))
+    assert.equal(soundPreview.previewPath, null)
   } finally {
     try {
       store?.close()
     } catch {
-      // Preserve the primary assertion failure, if any.
+      // Preserve the primary assertion failure.
     }
-
-    try {
-      rmSync(workspace, { recursive: true, force: true })
-    } catch {
-      // Preserve the primary assertion failure, if any.
-    }
-
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(runtime.scratchRoot, { recursive: true, force: true })
   }
 })

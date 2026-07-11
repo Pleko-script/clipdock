@@ -5,9 +5,11 @@ import { extname } from 'node:path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { registerAssetIpc, type AssetIpcRegistration } from './assetIpc'
 import { registerLibraryIpc, type LibraryIpcRegistration } from './libraryIpc'
 
 let libraryIpc: LibraryIpcRegistration | null = null
+let assetIpc: AssetIpcRegistration | null = null
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -54,6 +56,13 @@ function contentTypeForPath(filePath: string): string {
   if (extension === '.svg') return 'image/svg+xml'
   if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
   if (extension === '.png') return 'image/png'
+  if (extension === '.webp') return 'image/webp'
+  if (extension === '.wav') return 'audio/wav'
+  if (extension === '.mp3') return 'audio/mpeg'
+  if (extension === '.aac') return 'audio/aac'
+  if (extension === '.m4a') return 'audio/mp4'
+  if (extension === '.flac') return 'audio/flac'
+  if (extension === '.ogg') return 'audio/ogg'
   if (extension === '.webm') return 'video/webm'
   if (extension === '.mov') return 'video/quicktime'
   if (extension === '.mkv') return 'video/x-matroska'
@@ -63,27 +72,37 @@ function contentTypeForPath(filePath: string): string {
 
 function registerAssetProtocol(): void {
   protocol.handle('clipdock-media', async (request) => {
-    if (!libraryIpc) {
+    if (!libraryIpc || !assetIpc) {
       return new Response('ClipDock library is not ready.', { status: 503 })
     }
 
     const requestUrl = new URL(request.url)
     const kind =
-      requestUrl.host === 'thumbnail' ? 'thumbnail' : requestUrl.host === 'clip' ? 'media' : null
-    const clipId = decodeURIComponent(requestUrl.pathname.replace(/^\//, ''))
+      requestUrl.host === 'thumbnail' ||
+      requestUrl.host === 'preview' ||
+      requestUrl.host === 'media'
+        ? requestUrl.host
+        : requestUrl.host === 'clip'
+          ? 'media'
+          : null
+    const assetId = decodeURIComponent(requestUrl.pathname.replace(/^\//, ''))
 
-    if (!kind || clipId.length === 0) {
+    if (!kind || assetId.length === 0) {
       return new Response('Unsupported ClipDock asset URL.', { status: 404 })
     }
 
-    const asset = libraryIpc.resolveAssetPath(clipId, kind)
+    const asset = assetIpc.resolveAssetPath(assetId, kind)
+    const legacyAsset =
+      !asset.ok && kind !== 'preview'
+        ? libraryIpc.resolveAssetPath(assetId, kind === 'thumbnail' ? 'thumbnail' : 'media')
+        : asset
 
-    if (!asset.ok) {
-      return new Response(asset.error.message, { status: 404 })
+    if (!legacyAsset.ok) {
+      return new Response(legacyAsset.error.message, { status: 404 })
     }
 
     try {
-      const stats = await stat(asset.value)
+      const stats = await stat(legacyAsset.value)
 
       if (!stats.isFile()) {
         return new Response('ClipDock asset is not a file.', { status: 404 })
@@ -92,13 +111,13 @@ function registerAssetProtocol(): void {
       return new Response('ClipDock asset is missing.', { status: 404 })
     }
 
-    const response = await net.fetch(pathToFileURL(asset.value).toString())
+    const response = await net.fetch(pathToFileURL(legacyAsset.value).toString())
 
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
       headers: {
-        'content-type': contentTypeForPath(asset.value),
+        'content-type': contentTypeForPath(legacyAsset.value),
         'cache-control': kind === 'thumbnail' ? 'public, max-age=31536000' : 'no-store'
       }
     })
@@ -190,6 +209,7 @@ app.whenReady().then(() => {
   })
 
   libraryIpc = registerLibraryIpc()
+  assetIpc = registerAssetIpc()
   registerAssetProtocol()
 
   createWindow()
@@ -202,6 +222,8 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  assetIpc?.dispose()
+  assetIpc = null
   libraryIpc?.dispose()
   libraryIpc = null
 })

@@ -2,830 +2,483 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent,
   type JSX,
   type MouseEvent
 } from 'react'
+import { Filter, Grid2X2, PanelRight, RefreshCw, Search } from 'lucide-react'
 import type {
-  ClipdockApi,
-  ClipdockError,
-  ClipRotationDegrees,
-  LibraryBinRecordSummary,
-  LibraryClipRecordSummary,
-  LibrarySnapshot,
-  ScanEvent,
-  ScanSummary
+  AssetJobEvent,
+  AssetKind,
+  AssetNavigationSnapshot,
+  AssetQuery,
+  AssetSummary,
+  AssetUpdateRequest,
+  ClipdockApi
 } from '../../shared/clipdock'
-import { ClipGrid } from './components/ClipGrid'
-import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
-import { PreviewStage } from './components/PreviewStage'
-import { Sidebar } from './components/Sidebar'
-import { useClipSelection } from './hooks/useClipSelection'
+import { AssetGrid } from './components/AssetGrid'
+import { AssetInspector } from './components/AssetInspector'
+import { AssetSidebar } from './components/AssetSidebar'
+import { QuickLook } from './components/QuickLook'
 
-const EMPTY_STATUS = 'Add a folder to start building the local video library.'
+const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
+  packs: [],
+  collections: [],
+  tags: [],
+  totalAssets: 0,
+  favoriteCount: 0,
+  pendingPreviewCount: 0
+}
 
-function getClipdockApi(): ClipdockApi | null {
+function api(): ClipdockApi | null {
   return window.clipdock ?? null
 }
 
-function createPreloadError(
-  message = 'ClipDock secure preload bridge is unavailable.'
-): ClipdockError {
-  return { code: 'PRELOAD_IPC_FAILED', message }
-}
-
-function scanStatus(summary: ScanSummary): string {
-  return `Scan complete: ${summary.importedClips} new, ${summary.updatedClips} updated, ${summary.skippedClips} cached, ${summary.failedClips} with issues.`
-}
-
-function clipSearchHaystack(clip: LibraryClipRecordSummary): string {
-  return [clip.displayName, clip.filePath, clip.note, ...clip.tags].join(' ').toLocaleLowerCase()
-}
-
-function selectedIdsForClip(
-  clip: LibraryClipRecordSummary,
-  selectedClipIds: Set<string>
-): string[] {
-  return selectedClipIds.has(clip.id) ? [...selectedClipIds] : [clip.id]
-}
-
-function promptForBin(
-  bins: LibraryBinRecordSummary[],
-  title: string,
-  excludedBinId?: string | null
-): LibraryBinRecordSummary | null {
-  const choices = bins.filter((bin) => bin.id !== excludedBinId)
-
-  if (choices.length === 0) {
-    window.alert('No target bins available.')
-    return null
-  }
-
-  const answer = window.prompt(`${title}\n${choices.map((bin) => bin.name).join(', ')}`)
-
-  if (!answer) return null
-
-  const normalized = answer.trim().toLocaleLowerCase()
-
-  return (
-    choices.find(
-      (bin) => bin.id === answer.trim() || bin.name.trim().toLocaleLowerCase() === normalized
-    ) ?? null
-  )
-}
-
 function App(): JSX.Element {
-  const [snapshot, setSnapshot] = useState<LibrarySnapshot | null>(null)
-  const [status, setStatus] = useState(
-    window.clipdock ? 'Loading library...' : 'Secure preload bridge unavailable.'
-  )
-  const [lastError, setLastError] = useState<ClipdockError | null>(
-    window.clipdock ? null : createPreloadError()
-  )
-  const [busy, setBusy] = useState(false)
+  const [navigation, setNavigation] = useState(EMPTY_NAVIGATION)
+  const [assets, setAssets] = useState<AssetSummary[]>([])
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [totalCount, setTotalCount] = useState(0)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [sortMode, setSortMode] = useState('name')
-  const [favoriteOnly, setFavoriteOnly] = useState(false)
+  const [kind, setKind] = useState<AssetKind | 'all'>('all')
+  const [activePackId, setActivePackId] = useState<string | null>(null)
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
-  const [activeBinId, setActiveBinId] = useState<string | null>(null)
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-    items: ContextMenuItem[]
-  } | null>(null)
-  const [dragReady, setDragReady] = useState<Map<string, 'pending' | 'ready' | 'failed'>>(
-    () => new Map()
+  const [favoriteOnly, setFavoriteOnly] = useState(false)
+  const [sort, setSort] = useState<AssetQuery['sort']>('name')
+  const [density, setDensity] = useState(1)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [quickLookId, setQuickLookId] = useState<string | null>(null)
+  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('Ready')
+  const [jobProgress, setJobProgress] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const lastSelectedIndex = useRef<number | null>(null)
+  const nextCursorRef = useRef<string | null>(null)
+
+  const query = useMemo<AssetQuery>(
+    () => ({
+      search: debouncedSearch || undefined,
+      kinds: kind === 'all' ? undefined : [kind],
+      packIds: activePackId ? [activePackId] : undefined,
+      collectionIds: activeCollectionId ? [activeCollectionId] : undefined,
+      tags: selectedTag ? [selectedTag] : undefined,
+      favoriteOnly,
+      sort,
+      limit: 200
+    }),
+    [debouncedSearch, kind, activePackId, activeCollectionId, selectedTag, favoriteOnly, sort]
   )
 
-  const setClipDragReady = useCallback(
-    (clipId: string, state: 'pending' | 'ready' | 'failed' | null): void => {
-      setDragReady((previous) => {
-        const next = new Map(previous)
-
-        if (state === null) {
-          next.delete(clipId)
-        } else {
-          next.set(clipId, state)
-        }
-
-        return next
-      })
-    },
-    []
+  const selectedAssets = useMemo(
+    () => assets.filter((asset) => selectedIds.has(asset.id)),
+    [assets, selectedIds]
   )
+  const activeAsset = assets.find((asset) => asset.id === activeId) ?? null
+  const quickLookAsset = assets.find((asset) => asset.id === quickLookId) ?? null
 
-  const clips = useMemo(() => snapshot?.clips ?? [], [snapshot])
-  const sources = useMemo(() => snapshot?.sources ?? [], [snapshot])
-  const bins = useMemo(() => snapshot?.bins ?? [], [snapshot])
-
-  useEffect(() => {
-    const timer = window.setTimeout(
-      () => setDebouncedSearch(search.trim().toLocaleLowerCase()),
-      180
-    )
-
-    return () => window.clearTimeout(timer)
-  }, [search])
-
-  const filteredClips = useMemo(() => {
-    const filtered = clips.filter((clip) => {
-      if (favoriteOnly && !clip.favorite) return false
-      if (selectedTag && !clip.tags.includes(selectedTag)) return false
-      if (activeBinId && !clip.binIds.includes(activeBinId)) return false
-      if (debouncedSearch && !clipSearchHaystack(clip).includes(debouncedSearch)) return false
-
-      return true
-    })
-
-    return [...filtered].sort((left, right) => {
-      if (sortMode === 'modified') return right.modifiedAtMs - left.modifiedAtMs
-      if (sortMode === 'duration') return (right.durationMs ?? 0) - (left.durationMs ?? 0)
-      if (sortMode === 'size') return right.sizeBytes - left.sizeBytes
-
-      return left.displayName.localeCompare(right.displayName)
-    })
-  }, [activeBinId, clips, debouncedSearch, favoriteOnly, selectedTag, sortMode])
-
-  const {
-    activeClip,
-    activeClipId,
-    selectedClipIds,
-    selectedClipIdsRef,
-    setActiveClipId,
-    setSelectedClipIds,
-    selectClip,
-    openClip
-  } = useClipSelection(filteredClips)
-
-  const applySnapshot = useCallback((nextSnapshot: LibrarySnapshot): void => {
-    setSnapshot(nextSnapshot)
-    setDragReady(new Map())
+  const loadNavigation = useCallback(async (): Promise<void> => {
+    const bridge = api()
+    if (!bridge) return
+    const result = await bridge.getNavigationSnapshot()
+    if (result.ok) setNavigation(result.value)
+    else setStatus(result.error.message)
   }, [])
 
-  const ensureClipDragReady = useCallback(
-    async (clipId: string): Promise<'ready' | 'failed'> => {
-      const api = getClipdockApi()
-
-      if (!api) {
-        setClipDragReady(clipId, 'failed')
-        return 'failed'
-      }
-
-      setClipDragReady(clipId, 'pending')
-      const prepared = await api.prepareClipDrag({ clipIds: [clipId] })
-
-      if (prepared.ok) {
-        setClipDragReady(clipId, 'ready')
-        return 'ready'
-      }
-
-      setClipDragReady(clipId, 'failed')
-      setLastError(prepared.error)
-      setStatus(prepared.error.message)
-      return 'failed'
-    },
-    [setClipDragReady]
-  )
-
-  const maybePrepareDragReady = useCallback(
-    (clip: LibraryClipRecordSummary): void => {
-      if (clip.rotationDegrees === 0) return
-      if (dragReady.has(clip.id)) return
-
-      void ensureClipDragReady(clip.id)
-    },
-    [dragReady, ensureClipDragReady]
-  )
-
-  const handleSelectClip = useCallback(
-    (clip: LibraryClipRecordSummary, event: MouseEvent): void => {
-      selectClip(clip, event)
-      maybePrepareDragReady(clip)
-    },
-    [maybePrepareDragReady, selectClip]
-  )
-
-  const handleOpenClip = useCallback(
-    (clip: LibraryClipRecordSummary): void => {
-      openClip(clip)
-      maybePrepareDragReady(clip)
-    },
-    [maybePrepareDragReady, openClip]
-  )
-
-  useEffect(() => {
-    const api = getClipdockApi()
-
-    if (!api) return
-
-    let cancelled = false
-
-    async function loadLibrary(clipdock: ClipdockApi): Promise<void> {
-      setBusy(true)
-      const result = await clipdock.getLibrarySnapshot()
-
-      if (cancelled) return
-
-      if (result.ok) {
-        applySnapshot(result.value)
-        setStatus(
-          result.value.clips.length > 0
-            ? `Loaded ${result.value.clips.length} clips.`
-            : EMPTY_STATUS
-        )
-        setLastError(null)
-      } else {
-        setLastError(result.error)
-        setStatus('Library could not be loaded.')
-      }
-
-      setBusy(false)
-    }
-
-    void loadLibrary(api)
-
-    return () => {
-      cancelled = true
-    }
-  }, [applySnapshot])
-
-  useEffect(() => {
-    const api = getClipdockApi()
-
-    if (!api) return
-
-    const unsubscribeScan = api.onScanEvent((event: ScanEvent) => {
-      if (event.type === 'scan-started') {
-        setBusy(true)
-        setStatus(`Scanning ${event.totalFiles} files from ${event.sourceCount} sources...`)
+  const loadAssets = useCallback(
+    async (append = false): Promise<void> => {
+      const bridge = api()
+      if (!bridge) {
+        setStatus('Secure preload bridge unavailable.')
         return
       }
-
-      if (event.type === 'scan-progress') {
-        setStatus(`Scanning ${event.scannedFiles}/${event.totalFiles}: ${event.currentFile}`)
-        return
-      }
-
-      if (event.type === 'scan-file-error') {
-        setLastError(event.error)
-        setStatus(`Scan issue on ${event.currentFile}`)
-        return
-      }
-
-      if (event.type === 'scan-completed') {
-        setBusy(false)
-        setStatus(scanStatus(event.summary))
-        return
-      }
-
-      setBusy(false)
-      setLastError(event.error)
-      setStatus('Scan failed.')
-    })
-    const unsubscribeDrag = api.onClipDragEvent((event) => {
-      if (event.type === 'drag-started') {
-        setStatus(
-          `Native drag started for ${event.clipIds.length} clip${event.clipIds.length === 1 ? '' : 's'}.`
-        )
-        setLastError(null)
-        return
-      }
-
-      setLastError(
-        event.error ?? { code: 'DRAG_FAILED', phase: 'drag', message: 'Native drag failed.' }
-      )
-      setStatus('Native drag failed.')
-
-      if (event.error?.code === 'CLIP_EXPORT_FAILED') {
-        for (const clipId of event.clipIds) {
-          setClipDragReady(clipId, 'failed')
-        }
-      }
-    })
-
-    return () => {
-      unsubscribeScan()
-      unsubscribeDrag()
-    }
-  }, [setClipDragReady])
-
-  const runSnapshotAction = useCallback(
-    async (
-      action: () => Promise<
-        { ok: true; value: LibrarySnapshot } | { ok: false; error: ClipdockError }
-      >,
-      busyLabel: string
-    ) => {
-      setBusy(true)
-      setStatus(busyLabel)
-      const result = await action()
-
-      if (result.ok) {
-        applySnapshot(result.value)
-        setLastError(null)
-        setStatus(`Loaded ${result.value.clips.length} clips.`)
-      } else {
-        setLastError(result.error)
+      const result = await bridge.queryAssets({
+        ...query,
+        cursor: append ? (nextCursorRef.current ?? undefined) : undefined
+      })
+      if (!result.ok) {
         setStatus(result.error.message)
+        return
       }
-
-      setBusy(false)
+      setAssets((current) => (append ? [...current, ...result.value.items] : result.value.items))
+      setNextCursor(result.value.nextCursor)
+      nextCursorRef.current = result.value.nextCursor
+      setTotalCount(result.value.totalCount)
+      if (!append) {
+        setSelectedIds(new Set())
+        setActiveId(result.value.items[0]?.id ?? null)
+      }
     },
-    [applySnapshot]
+    [query]
   )
 
-  const handleAddFolder = useCallback(async (): Promise<void> => {
-    const api = getClipdockApi()
+  const refresh = useCallback(async (): Promise<void> => {
+    await Promise.all([loadNavigation(), loadAssets(false)])
+  }, [loadAssets, loadNavigation])
 
-    if (!api) {
-      setLastError(createPreloadError())
-      return
-    }
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 150)
+    return () => clearTimeout(timer)
+  }, [search])
+  useEffect(() => {
+    const timer = setTimeout(() => void loadAssets(false), 0)
+    return () => clearTimeout(timer)
+  }, [loadAssets])
+  useEffect(() => {
+    const timer = setTimeout(() => void loadNavigation(), 0)
+    return () => clearTimeout(timer)
+  }, [loadNavigation])
 
-    setBusy(true)
-    setStatus('Opening folder picker...')
-    const result = await api.addLinkedFolder()
-
-    if (result.ok) {
-      applySnapshot(result.value.snapshot)
-      setStatus(scanStatus(result.value.summary))
-      setLastError(null)
-    } else {
-      setStatus(result.error.code === 'CANCELLED' ? 'Add folder cancelled.' : result.error.message)
-      setLastError(result.error.code === 'CANCELLED' ? null : result.error)
-    }
-
-    setBusy(false)
-  }, [applySnapshot])
-
-  const handleCopyVideos = useCallback(async (): Promise<void> => {
-    const api = getClipdockApi()
-
-    if (!api) {
-      setLastError(createPreloadError())
-      return
-    }
-
-    setBusy(true)
-    setStatus('Opening video picker...')
-    const result = await api.copyVideosIntoLibrary()
-
-    if (result.ok) {
-      applySnapshot(result.value.snapshot)
-      setStatus(`Copied import complete: ${result.value.summary.createdClipCount} new clips.`)
-      setLastError(result.value.summary.errors[0] ?? null)
-    } else {
-      setStatus(result.error.code === 'CANCELLED' ? 'Copy videos cancelled.' : result.error.message)
-      setLastError(result.error.code === 'CANCELLED' ? null : result.error)
-    }
-
-    setBusy(false)
-  }, [applySnapshot])
-
-  const handleRescan = useCallback(async (): Promise<void> => {
-    const api = getClipdockApi()
-
-    if (!api) {
-      setLastError(createPreloadError())
-      return
-    }
-
-    setBusy(true)
-    setStatus('Starting rescan...')
-    const result = await api.rescanLibrary()
-
-    if (result.ok) {
-      applySnapshot(result.value.snapshot)
-      setStatus(scanStatus(result.value.summary))
-      setLastError(null)
-    } else {
-      setStatus(result.error.message)
-      setLastError(result.error)
-    }
-
-    setBusy(false)
-  }, [applySnapshot])
-
-  const handleDragClip = useCallback(
-    (clip: LibraryClipRecordSummary, event: DragEvent<HTMLElement>): void => {
-      const api = getClipdockApi()
-
-      if (!api) {
-        setLastError(createPreloadError())
-        return
-      }
-
-      const selectedIds = selectedIdsForClip(clip, selectedClipIdsRef.current)
-      const blockingClips = selectedIds
-        .map((id) => clips.find((entry) => entry.id === id))
-        .filter((entry): entry is LibraryClipRecordSummary => Boolean(entry))
-        .filter((entry) => entry.rotationDegrees !== 0 && dragReady.get(entry.id) !== 'ready')
-
-      if (blockingClips.length > 0) {
-        event.preventDefault()
-
-        const needsPrepare = blockingClips.filter(
-          (entry) => (dragReady.get(entry.id) ?? null) !== 'pending'
-        )
-
-        for (const entry of needsPrepare) {
-          void ensureClipDragReady(entry.id)
-        }
-
-        setStatus(
-          needsPrepare.length > 0
-            ? 'Preparing rotated export... try dragging again when ready.'
-            : 'Rotated export still preparing. Try again in a moment.'
-        )
-        return
-      }
-
-      // Electron owns the native drag session from this point on. Letting Chromium
-      // start its HTML drag at the same time can terminate the process on Windows.
-      event.preventDefault()
-      event.dataTransfer.setData('application/x-clipdock-clip-ids', JSON.stringify(selectedIds))
-      setSelectedClipIds(new Set(selectedIds))
-      setActiveClipId(clip.id)
+  useEffect(() => {
+    const bridge = api()
+    if (!bridge) return
+    const offJobs = bridge.onAssetJobEvent((event: AssetJobEvent) => {
+      if (event.type === 'scan-progress')
+        setJobProgress(`Scanning ${event.completed + 1} / ${event.total}`)
+      if (event.type === 'preview-progress')
+        setJobProgress(`Building previews ${event.completed} / ${event.total}`)
+      if (event.type === 'scan-completed' || event.type === 'preview-completed') void refresh()
+      if (event.type === 'scan-completed') setJobProgress(null)
+      if (event.type === 'preview-failed') setStatus(event.message)
+    })
+    const offDrag = bridge.onAssetDragEvent((event) => {
       setStatus(
-        `Starting native drag for ${selectedIds.length} clip${selectedIds.length === 1 ? '' : 's'}...`
+        event.type === 'drag-started'
+          ? `Dragged ${event.assetIds.length} asset${event.assetIds.length === 1 ? '' : 's'}.`
+          : (event.error?.message ?? 'Native drag failed.')
       )
-      api.startClipDrag({ clipIds: selectedIds })
-    },
-    [clips, dragReady, ensureClipDragReady, selectedClipIdsRef, setActiveClipId, setSelectedClipIds]
-  )
-
-  const handleToggleFavorite = useCallback(
-    async (clip: LibraryClipRecordSummary): Promise<void> => {
-      const api = getClipdockApi()
-
-      if (!api) return
-      await runSnapshotAction(() => api.toggleFavorite(clip.id), 'Updating favorite...')
-    },
-    [runSnapshotAction]
-  )
-
-  const handleUpdateTags = useCallback(
-    async (clip: LibraryClipRecordSummary, tags: string[]): Promise<void> => {
-      const api = getClipdockApi()
-
-      if (!api) return
-      await runSnapshotAction(() => api.updateClipTags(clip.id, tags), 'Saving tags...')
-    },
-    [runSnapshotAction]
-  )
-
-  const handleUpdateNote = useCallback(
-    async (clip: LibraryClipRecordSummary, note: string): Promise<void> => {
-      const api = getClipdockApi()
-
-      if (!api) return
-      await runSnapshotAction(() => api.updateClipNote(clip.id, note), 'Saving note...')
-    },
-    [runSnapshotAction]
-  )
-
-  const handleUpdateRotation = useCallback(
-    async (clip: LibraryClipRecordSummary, rotationDegrees: ClipRotationDegrees): Promise<void> => {
-      const api = getClipdockApi()
-
-      if (!api) return
-
-      setBusy(true)
-      setStatus('Saving rotation...')
-      const rotation = await api.updateClipRotation(clip.id, rotationDegrees)
-
-      if (!rotation.ok) {
-        setLastError(rotation.error)
-        setStatus(rotation.error.message)
-        setBusy(false)
-        return
-      }
-
-      applySnapshot(rotation.value)
-
-      if (rotationDegrees === 0) {
-        setClipDragReady(clip.id, null)
-        setLastError(null)
-        setStatus(`Loaded ${rotation.value.clips.length} clips.`)
-        setBusy(false)
-        return
-      }
-
-      setStatus('Preparing rotated drag export for timeline drop...')
-      const outcome = await ensureClipDragReady(clip.id)
-
-      if (outcome === 'ready') {
-        setLastError(null)
-        setStatus('Rotated drag export ready.')
-      }
-
-      setBusy(false)
-    },
-    [applySnapshot, ensureClipDragReady, setClipDragReady]
-  )
-
-  const handleReveal = useCallback(async (clip: LibraryClipRecordSummary): Promise<void> => {
-    const api = getClipdockApi()
-
-    if (!api) return
-    const result = await api.revealClip(clip.id)
-
-    if (!result.ok) setLastError(result.error)
-  }, [])
-
-  const handleCopyPath = useCallback(async (clip: LibraryClipRecordSummary): Promise<void> => {
-    const api = getClipdockApi()
-
-    if (!api) return
-    const result = await api.copyClipPath(clip.id)
-
-    if (result.ok) {
-      setStatus('Path copied.')
-    } else {
-      setLastError(result.error)
+    })
+    return () => {
+      offJobs()
+      offDrag()
     }
-  }, [])
+  }, [refresh])
 
-  const handleCreateBin = useCallback(async (): Promise<void> => {
-    const name = window.prompt('Bin name')
-    const api = getClipdockApi()
+  const clearScope = (): void => {
+    setActivePackId(null)
+    setActiveCollectionId(null)
+    setSelectedTag(null)
+    setFavoriteOnly(false)
+  }
 
-    if (!api || !name) return
-    await runSnapshotAction(() => api.createBin(name), 'Creating bin...')
-  }, [runSnapshotAction])
-
-  const handleRenameBin = useCallback(
-    async (binId: string): Promise<void> => {
-      const current = bins.find((bin) => bin.id === binId)
-      const name = window.prompt('Bin name', current?.name ?? '')
-      const api = getClipdockApi()
-
-      if (!api || !name) return
-      await runSnapshotAction(() => api.renameBin(binId, name), 'Renaming bin...')
+  const mutate = useCallback(
+    async (
+      operation: (bridge: ClipdockApi) => Promise<{ ok: boolean; error?: { message: string } }>
+    ): Promise<void> => {
+      const bridge = api()
+      if (!bridge) return
+      const result = await operation(bridge)
+      if (!result.ok) setStatus(result.error?.message ?? 'Operation failed.')
+      else await refresh()
     },
-    [bins, runSnapshotAction]
+    [refresh]
   )
 
-  const handleDeleteBin = useCallback(
-    async (binId: string): Promise<void> => {
-      const api = getClipdockApi()
+  const addPack = async (): Promise<void> => {
+    const bridge = api()
+    if (!bridge) return
+    setBusy(true)
+    setStatus('Adding effect pack...')
+    const result = await bridge.addPackFolder()
+    setBusy(false)
+    setStatus(
+      result.ok ? `Imported ${result.value.importedAssets} new assets.` : result.error.message
+    )
+    if (result.ok) {
+      clearScope()
+      await refresh()
+    }
+  }
 
-      if (!api || !window.confirm('Delete this bin from ClipDock?')) return
-      await runSnapshotAction(() => api.deleteBin(binId), 'Deleting bin...')
-      if (activeBinId === binId) setActiveBinId(null)
-    },
-    [activeBinId, runSnapshotAction]
-  )
+  const rescan = async (): Promise<void> => {
+    const bridge = api()
+    if (!bridge) return
+    setBusy(true)
+    setStatus('Scanning packs...')
+    const result = await bridge.rescanPacks(activePackId ? [activePackId] : undefined)
+    setBusy(false)
+    setJobProgress(null)
+    setStatus(result.ok ? 'Pack scan complete.' : result.error.message)
+    if (result.ok) await refresh()
+  }
 
-  const handleDropClipsToBin = useCallback(
-    async (clipIds: string[], binId: string): Promise<void> => {
-      const api = getClipdockApi()
+  const updateAssets = (request: AssetUpdateRequest): void => {
+    void mutate((bridge) => bridge.updateAssets(request))
+  }
 
-      if (!api || clipIds.length === 0) return
-      await runSnapshotAction(() => api.addClipsToBin(clipIds, binId), 'Adding clips to bin...')
-    },
-    [runSnapshotAction]
-  )
+  const selectAsset = (asset: AssetSummary, event: MouseEvent): void => {
+    const index = assets.findIndex((item) => item.id === asset.id)
+    setActiveId(asset.id)
+    setSelectedIds((current) => {
+      if (event.shiftKey && lastSelectedIndex.current !== null) {
+        const start = Math.min(lastSelectedIndex.current, index)
+        const end = Math.max(lastSelectedIndex.current, index)
+        return new Set(assets.slice(start, end + 1).map((item) => item.id))
+      }
+      if (event.ctrlKey || event.metaKey) {
+        const next = new Set(current)
+        if (next.has(asset.id)) next.delete(asset.id)
+        else next.add(asset.id)
+        lastSelectedIndex.current = index
+        return next
+      }
+      lastSelectedIndex.current = index
+      return new Set([asset.id])
+    })
+  }
 
-  const handleOpenClipMenu = useCallback(
-    (clip: LibraryClipRecordSummary, event: MouseEvent): void => {
-      event.preventDefault()
+  const dragAsset = (asset: AssetSummary, event: DragEvent<HTMLElement>): void => {
+    const bridge = api()
+    if (!bridge) return
+    const ids = selectedIds.has(asset.id) ? [...selectedIds] : [asset.id]
+    event.preventDefault()
+    event.dataTransfer.setData('application/x-clipdock-asset-ids', JSON.stringify(ids))
+    bridge.startAssetDrag({ assetIds: ids })
+  }
 
-      const api = getClipdockApi()
-      const clipIds = selectedIdsForClip(clip, selectedClipIdsRef.current)
-      const items: ContextMenuItem[] = [
-        {
-          id: 'favorite',
-          label: clip.favorite ? 'Remove favorite' : 'Mark favorite',
-          onSelect: () => void handleToggleFavorite(clip)
-        },
-        {
-          id: 'add-to-bin',
-          label: 'Add to bin',
-          disabled: bins.length === 0,
-          onSelect: () => {
-            const bin = promptForBin(bins, 'Add to bin')
-
-            if (api && bin) {
-              void runSnapshotAction(
-                () => api.addClipsToBin(clipIds, bin.id),
-                'Adding clips to bin...'
-              )
-            }
-          }
-        },
-        {
-          id: 'move-to-bin',
-          label: 'Move to bin',
-          disabled: !activeBinId || bins.length < 2,
-          onSelect: () => {
-            const bin = promptForBin(bins, 'Move to bin', activeBinId)
-
-            if (api && bin && activeBinId) {
-              void runSnapshotAction(
-                () => api.moveClipsToBin(clipIds, activeBinId, bin.id),
-                'Moving clips...'
-              )
-            }
-          }
-        },
-        {
-          id: 'remove-from-bin',
-          label: 'Remove from current bin',
-          disabled: !activeBinId,
-          onSelect: () => {
-            if (api && activeBinId) {
-              void runSnapshotAction(
-                () => api.removeClipsFromBin(clipIds, activeBinId),
-                'Removing clips from bin...'
-              )
-            }
-          }
-        },
-        {
-          id: 'reveal',
-          label: 'Reveal in Explorer',
-          onSelect: () => void handleReveal(clip)
-        },
-        {
-          id: 'copy-path',
-          label: 'Copy Path',
-          onSelect: () => void handleCopyPath(clip)
-        },
-        {
-          id: 'remove-library',
-          label: 'Remove from ClipDock',
-          destructive: true,
-          onSelect: () => {
-            if (
-              api &&
-              window.confirm('Remove selected clips from ClipDock? Source files stay on disk.')
-            ) {
-              void runSnapshotAction(
-                () => api.removeClipsFromLibrary(clipIds),
-                'Removing clips from ClipDock...'
-              )
-            }
-          }
-        }
-      ]
-
-      setContextMenu({ x: event.clientX, y: event.clientY, items })
-    },
-    [
-      activeBinId,
-      bins,
-      handleCopyPath,
-      handleReveal,
-      handleToggleFavorite,
-      runSnapshotAction,
-      selectedClipIdsRef
-    ]
-  )
-
-  const handleOpenBinMenu = useCallback(
-    (binId: string, x: number, y: number): void => {
-      setContextMenu({
-        x,
-        y,
-        items: [
-          {
-            id: 'rename-bin',
-            label: 'Rename bin',
-            onSelect: () => void handleRenameBin(binId)
-          },
-          {
-            id: 'delete-bin',
-            label: 'Delete bin',
-            destructive: true,
-            onSelect: () => void handleDeleteBin(binId)
-          }
-        ]
-      })
-    },
-    [handleDeleteBin, handleRenameBin]
-  )
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement
+      const editing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+      if (event.key === '/' && !editing) {
+        event.preventDefault()
+        searchRef.current?.focus()
+        return
+      }
+      if (event.key === 'Escape') {
+        setQuickLookId(null)
+        return
+      }
+      if (editing) return
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        setSelectedIds(new Set(assets.map((asset) => asset.id)))
+        return
+      }
+      if (event.key === ' ' && activeId) {
+        event.preventDefault()
+        setQuickLookId(activeId)
+        return
+      }
+      if (event.key.toLowerCase() === 'f' && activeId) {
+        event.preventDefault()
+        void mutate((bridge) => bridge.toggleAssetFavorite(activeId))
+        return
+      }
+      if (event.key === '+' || event.key === '=') {
+        setDensity((value) => Math.min(3, value + 1))
+        return
+      }
+      if (event.key === '-') {
+        setDensity((value) => Math.max(0, value - 1))
+        return
+      }
+      if (event.key.startsWith('Arrow') && assets.length) {
+        event.preventDefault()
+        const current = Math.max(
+          0,
+          assets.findIndex((asset) => asset.id === activeId)
+        )
+        const next =
+          event.key === 'ArrowRight' || event.key === 'ArrowDown'
+            ? Math.min(assets.length - 1, current + 1)
+            : Math.max(0, current - 1)
+        setActiveId(assets[next].id)
+        setSelectedIds(new Set([assets[next].id]))
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [activeId, assets, mutate])
 
   return (
-    <main className="app-shell">
-      <Sidebar
-        sources={sources}
-        clips={clips}
-        bins={bins}
+    <main className={`asset-app${inspectorOpen ? ' inspector-visible' : ''}`}>
+      <AssetSidebar
+        navigation={navigation}
+        activePackId={activePackId}
+        activeCollectionId={activeCollectionId}
         selectedTag={selectedTag}
         favoriteOnly={favoriteOnly}
-        activeBinId={activeBinId}
-        onSelectTag={(tag) => {
-          setSelectedTag(tag)
-          setFavoriteOnly(false)
-          setActiveBinId(null)
-        }}
-        onShowFavorites={() => {
-          setFavoriteOnly(true)
-          setSelectedTag(null)
-          setActiveBinId(null)
-        }}
-        onShowAll={() => {
-          setFavoriteOnly(false)
-          setSelectedTag(null)
-          setActiveBinId(null)
-        }}
-        onSelectBin={(binId) => {
-          setActiveBinId(binId)
-          setFavoriteOnly(false)
-          setSelectedTag(null)
-        }}
-        onAddFolder={handleAddFolder}
-        onCopyVideos={handleCopyVideos}
-        onCreateBin={handleCreateBin}
-        onOpenBinMenu={handleOpenBinMenu}
-        onDropClipsToBin={handleDropClipsToBin}
         busy={busy}
+        onShowAll={() => clearScope()}
+        onShowFavorites={() => {
+          clearScope()
+          setFavoriteOnly(true)
+        }}
+        onSelectPack={(id) => {
+          clearScope()
+          setActivePackId(id)
+        }}
+        onSelectCollection={(id) => {
+          clearScope()
+          setActiveCollectionId(id)
+        }}
+        onSelectTag={(tag) => {
+          clearScope()
+          setSelectedTag(tag)
+        }}
+        onAddPack={() => void addPack()}
+        onRelinkPack={(id) => void mutate((bridge) => bridge.relinkPack(id))}
+        onCreateCollection={() => {
+          const name = window.prompt('Collection name')
+          if (name) void mutate((bridge) => bridge.createCollection(name))
+        }}
+        onRenameCollection={(id, currentName) => {
+          const name = window.prompt('Collection name', currentName)
+          if (name && name !== currentName)
+            void mutate((bridge) => bridge.renameCollection(id, name))
+        }}
+        onDeleteCollection={(id, name) => {
+          if (window.confirm(`Delete collection “${name}”? Assets stay in the library.`))
+            void mutate((bridge) => bridge.deleteCollection(id))
+        }}
+        onDropCollection={(ids, collectionId) =>
+          ids.length && void mutate((bridge) => bridge.addAssetsToCollection(ids, collectionId))
+        }
       />
 
-      <section className="library-view">
-        <header className="topbar">
-          <div className="search-wrap">
+      <section className="asset-library">
+        <header className="asset-toolbar">
+          <label className="asset-search">
+            <Search size={18} />
             <input
+              ref={searchRef}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search filename, path, tags, notes"
+              placeholder="Search effects, packs, folders, tags"
             />
-          </div>
-          <select
-            value={sortMode}
-            onChange={(event) => setSortMode(event.target.value)}
-            aria-label="Sort clips"
-          >
-            <option value="name">Name</option>
-            <option value="modified">Modified</option>
-            <option value="duration">Duration</option>
-            <option value="size">Size</option>
-          </select>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={favoriteOnly}
-              onChange={(event) => {
-                setFavoriteOnly(event.target.checked)
-                setActiveBinId(null)
-              }}
-            />
-            Favorites
+            <kbd>/</kbd>
           </label>
-          <button type="button" className="ghost-button" onClick={handleRescan} disabled={busy}>
-            Rescan
-          </button>
+          <nav className="kind-tabs">
+            {(['all', 'transition', 'overlay', 'sound'] as const).map((value) => (
+              <button
+                type="button"
+                key={value}
+                className={kind === value ? 'active' : ''}
+                onClick={() => setKind(value)}
+              >
+                {value === 'all' ? 'All' : `${value[0].toUpperCase()}${value.slice(1)}s`}
+              </button>
+            ))}
+          </nav>
+          <div className="toolbar-actions">
+            <select
+              value={sort}
+              onChange={(event) => setSort(event.target.value as AssetQuery['sort'])}
+              aria-label="Sort assets"
+            >
+              <option value="name">Name</option>
+              <option value="recent">Recently added</option>
+              <option value="modified">Modified</option>
+              <option value="duration">Duration</option>
+            </select>
+            <button
+              type="button"
+              title="Decrease thumbnail size"
+              onClick={() => setDensity((value) => Math.max(0, value - 1))}
+            >
+              <Grid2X2 size={16} />
+            </button>
+            <input
+              className="density-range"
+              type="range"
+              min="0"
+              max="3"
+              value={density}
+              onChange={(event) => setDensity(Number(event.target.value))}
+              aria-label="Thumbnail size"
+            />
+            <button type="button" title="Filters">
+              <Filter size={17} />
+            </button>
+            <button
+              type="button"
+              className={inspectorOpen ? 'active' : ''}
+              title="Inspector"
+              onClick={() => setInspectorOpen((value) => !value)}
+            >
+              <PanelRight size={17} />
+            </button>
+            <button
+              type="button"
+              title="Rescan packs"
+              onClick={() => void rescan()}
+              disabled={busy}
+            >
+              <RefreshCw size={17} className={busy ? 'spin' : ''} />
+            </button>
+          </div>
         </header>
 
-        <PreviewStage
-          clip={activeClip}
-          dragReadyState={activeClip ? dragReady.get(activeClip.id) : undefined}
-          onToggleFavorite={handleToggleFavorite}
-          onUpdateTags={handleUpdateTags}
-          onUpdateNote={handleUpdateNote}
-          onReveal={handleReveal}
-          onCopyPath={handleCopyPath}
-          onDragClip={handleDragClip}
-          onRotate={handleUpdateRotation}
-        />
-
-        <div className="library-meta">
-          <span>{filteredClips.length} visible</span>
-          <span>{selectedClipIds.size} selected</span>
-          <span>{busy ? 'Busy' : 'Ready'}</span>
+        <div className="asset-results-bar">
+          <span>
+            {totalCount} asset{totalCount === 1 ? '' : 's'}
+          </span>
+          {selectedIds.size ? <strong>{selectedIds.size} selected</strong> : null}
+          <span>
+            {activePackId
+              ? navigation.packs.find((pack) => pack.id === activePackId)?.name
+              : activeCollectionId
+                ? navigation.collections.find((collection) => collection.id === activeCollectionId)
+                    ?.name
+                : selectedTag
+                  ? `#${selectedTag}`
+                  : favoriteOnly
+                    ? 'Favorites'
+                    : 'Entire library'}
+          </span>
         </div>
 
-        <ClipGrid
-          clips={filteredClips}
-          activeClipId={activeClipId}
-          selectedClipIds={selectedClipIds}
-          dragReady={dragReady}
-          onSelectClip={handleSelectClip}
-          onOpenClip={handleOpenClip}
-          onDragClip={handleDragClip}
-          onOpenClipMenu={handleOpenClipMenu}
-          onToggleFavorite={handleToggleFavorite}
+        <AssetGrid
+          assets={assets}
+          selectedIds={selectedIds}
+          activeId={activeId}
+          density={density}
+          onSelect={selectAsset}
+          onOpen={(asset) => setQuickLookId(asset.id)}
+          onDrag={dragAsset}
+          onFavorite={(asset) => void mutate((bridge) => bridge.toggleAssetFavorite(asset.id))}
         />
-
-        <footer className="status-bar">
-          <span>{status}</span>
-          {lastError ? (
-            <strong>
-              {lastError.code}: {lastError.message}
-            </strong>
-          ) : null}
+        {nextCursor ? (
+          <button type="button" className="load-more" onClick={() => void loadAssets(true)}>
+            Load more
+          </button>
+        ) : null}
+        <footer className="asset-status">
+          <span>{jobProgress ?? status}</span>
+          <span>
+            {navigation.pendingPreviewCount
+              ? `${navigation.pendingPreviewCount} previews queued`
+              : 'Preview cache ready'}
+          </span>
         </footer>
       </section>
 
-      {contextMenu ? (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          items={contextMenu.items}
-          onClose={() => setContextMenu(null)}
+      {inspectorOpen ? (
+        <AssetInspector
+          key={(selectedAssets.length ? selectedAssets : activeAsset ? [activeAsset] : [])
+            .map((asset) => asset.id)
+            .join(':')}
+          assets={selectedAssets.length ? selectedAssets : activeAsset ? [activeAsset] : []}
+          onClose={() => setInspectorOpen(false)}
+          onUpdate={updateAssets}
+          onReveal={(asset) => void mutate((bridge) => bridge.revealAsset(asset.id))}
+          onRegenerate={(items) =>
+            void mutate((bridge) => bridge.regeneratePreviews(items.map((item) => item.id)))
+          }
+        />
+      ) : null}
+      {quickLookAsset ? (
+        <QuickLook
+          key={quickLookAsset.id}
+          asset={quickLookAsset}
+          onClose={() => setQuickLookId(null)}
+          onFavorite={() => void mutate((bridge) => bridge.toggleAssetFavorite(quickLookAsset.id))}
         />
       ) : null}
     </main>
