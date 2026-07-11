@@ -4,6 +4,13 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { hasAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 import { ASSET_SCHEMA_VERSION, migrateAssetSchema, normalizeAssetPath } from './assetSchema'
+import {
+  beginAssetTrim,
+  clearAssetTrim,
+  completeAssetTrim,
+  failAssetTrim,
+  type AssetTrimSource
+} from './assetTrimStore'
 import type {
   AssetKind,
   AssetMediaType,
@@ -17,7 +24,9 @@ import type {
   ClipdockResult,
   CompatibilityLevel,
   OverlayMode,
-  PreviewStatus
+  PreviewStatus,
+  TrimStatus,
+  VideoRotation
 } from '../shared/clipdock'
 
 const DEFAULT_PAGE_SIZE = 200
@@ -55,6 +64,11 @@ export interface StoredAssetPath {
   filePath: string
   mediaType: AssetMediaType
   status: AssetStatus
+  trimStartMs: number | null
+  trimEndMs: number | null
+  rotationDegrees: VideoRotation
+  trimStatus: TrimStatus
+  trimmedPath: string | null
 }
 
 export interface PreviewJobRecord {
@@ -73,6 +87,27 @@ export interface AssetStore {
   queryAssets: (query: AssetQuery) => ClipdockResult<AssetPage>
   navigation: () => ClipdockResult<AssetNavigationSnapshot>
   updateAssets: (request: AssetUpdateRequest) => ClipdockResult<void>
+  beginTrim: (
+    assetId: string,
+    startMs: number | null,
+    endMs: number | null,
+    rotationDegrees: VideoRotation
+  ) => ClipdockResult<AssetTrimSource>
+  completeTrim: (
+    assetId: string,
+    startMs: number | null,
+    endMs: number | null,
+    rotationDegrees: VideoRotation,
+    trimmedPath: string
+  ) => ClipdockResult<void>
+  failTrim: (
+    assetId: string,
+    startMs: number | null,
+    endMs: number | null,
+    rotationDegrees: VideoRotation,
+    message: string
+  ) => ClipdockResult<void>
+  clearTrim: (assetId: string) => ClipdockResult<string | null>
   toggleFavorite: (assetId: string) => ClipdockResult<void>
   createCollection: (name: string) => ClipdockResult<void>
   renameCollection: (collectionId: string, name: string) => ClipdockResult<void>
@@ -126,6 +161,11 @@ interface AssetRow {
   preview_status: PreviewStatus
   thumbnail_path: string | null
   preview_path: string | null
+  trim_start_ms: number | null
+  trim_end_ms: number | null
+  rotation_degrees: VideoRotation
+  trim_status: TrimStatus
+  trim_error_message: string | null
   updated_at_ms: number
   last_error_message: string | null
 }
@@ -334,6 +374,8 @@ class SqliteAssetStore implements AssetStore {
           status='ready', preview_status=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN 'pending' ELSE assets.preview_status END,
           thumbnail_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.thumbnail_path END,
           preview_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.preview_path END,
+          trim_status=CASE WHEN (assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes) AND (assets.trim_start_ms IS NOT NULL OR assets.rotation_degrees != 0) THEN 'pending' ELSE assets.trim_status END,
+          trim_error_message=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.trim_error_message END,
           updated_at_ms=excluded.updated_at_ms, last_error_message=NULL
       `
           )
@@ -662,15 +704,84 @@ class SqliteAssetStore implements AssetStore {
     }
   }
 
+  beginTrim(
+    assetId: string,
+    startMs: number | null,
+    endMs: number | null,
+    rotationDegrees: VideoRotation
+  ): ClipdockResult<AssetTrimSource> {
+    return beginAssetTrim(this.database, assetId, startMs, endMs, rotationDegrees, this.now())
+  }
+  completeTrim(
+    assetId: string,
+    startMs: number | null,
+    endMs: number | null,
+    rotationDegrees: VideoRotation,
+    trimmedPath: string
+  ): ClipdockResult<void> {
+    return completeAssetTrim(
+      this.database,
+      assetId,
+      startMs,
+      endMs,
+      rotationDegrees,
+      trimmedPath,
+      this.now()
+    )
+  }
+  failTrim(
+    assetId: string,
+    startMs: number | null,
+    endMs: number | null,
+    rotationDegrees: VideoRotation,
+    message: string
+  ): ClipdockResult<void> {
+    return failAssetTrim(
+      this.database,
+      assetId,
+      startMs,
+      endMs,
+      rotationDegrees,
+      message,
+      this.now()
+    )
+  }
+  clearTrim(assetId: string): ClipdockResult<string | null> {
+    return clearAssetTrim(this.database, assetId, this.now())
+  }
   getAssetPath(assetId: string): ClipdockResult<StoredAssetPath> {
     try {
       const row = this.database
-        .prepare('SELECT id,file_path,media_type,status FROM assets WHERE id=?')
+        .prepare(
+          'SELECT id,file_path,media_type,status,trim_start_ms,trim_end_ms,rotation_degrees,trim_status,trimmed_path FROM assets WHERE id=?'
+        )
         .get(assetId) as
-        | { id: string; file_path: string; media_type: AssetMediaType; status: AssetStatus }
+        | {
+            id: string
+            file_path: string
+            media_type: AssetMediaType
+            status: AssetStatus
+            trim_start_ms: number | null
+            trim_end_ms: number | null
+            rotation_degrees: VideoRotation
+            trim_status: TrimStatus
+            trimmed_path: string | null
+          }
         | undefined
       return row
-        ? ok({ id: row.id, filePath: row.file_path, mediaType: row.media_type, status: row.status })
+        ? ok({
+            id: row.id,
+            filePath: row.file_path,
+            mediaType: row.media_type,
+            status: row.status,
+            trimStartMs: row.trim_start_ms,
+            trimEndMs: row.trim_end_ms,
+            rotationDegrees: [90, 180, 270].includes(row.rotation_degrees)
+              ? row.rotation_degrees
+              : 0,
+            trimStatus: row.trim_status,
+            trimmedPath: row.trimmed_path
+          })
         : fail('Asset was not found.')
     } catch {
       return fail('Asset path could not be resolved.')
@@ -888,6 +999,11 @@ class SqliteAssetStore implements AssetStore {
       collectionIds,
       status: row.status,
       previewStatus: row.preview_status,
+      trimStartMs: row.trim_start_ms,
+      trimEndMs: row.trim_end_ms,
+      rotationDegrees: [90, 180, 270].includes(row.rotation_degrees) ? row.rotation_degrees : 0,
+      trimStatus: row.trim_status,
+      trimErrorMessage: row.trim_error_message,
       thumbnailUrl: row.thumbnail_path ? assetUrl('thumbnail', row.id, row.updated_at_ms) : null,
       previewUrl: row.preview_path ? assetUrl('preview', row.id, row.updated_at_ms) : null,
       mediaUrl: assetUrl('media', row.id, row.updated_at_ms),

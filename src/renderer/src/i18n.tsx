@@ -1,0 +1,354 @@
+/* eslint-disable react-refresh/only-export-components */
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type JSX,
+  type ReactNode
+} from 'react'
+import type { AssetKind } from '../../shared/clipdock'
+
+export type Language = 'en' | 'de'
+
+const en = {
+  'app.ready': 'Ready',
+  'app.pack': 'Pack',
+  'app.collection': 'Collection',
+  'app.favorites': 'Favorites',
+  'app.entireLibrary': 'Entire library',
+  'app.scanningProgress': 'Scanning {{current}} / {{total}}',
+  'app.previewProgress': 'Building previews {{current}} / {{total}}',
+  'app.draggedOne': 'Dragged 1 asset{{prepared}}.',
+  'app.draggedMany': 'Dragged {{count}} assets{{prepared}}.',
+  'app.preparedCount': ' ({{count}} prepared)',
+  'app.dragFailed': 'Native drag failed.',
+  'app.addingPack': 'Adding effect pack...',
+  'app.importedOne': 'Imported 1 new asset.',
+  'app.importedMany': 'Imported {{count}} new assets.',
+  'app.scanningPacks': 'Scanning packs...',
+  'app.scanComplete': 'Pack scan complete.',
+  'app.resettingEdit': 'Resetting video edit...',
+  'app.renderingEdit': 'Rendering video edit...',
+  'app.editReset': 'Video edit reset. Drag will use the original file.',
+  'app.editReady': 'Video edit ready. Drag will use the prepared video.',
+  'dialog.collectionName': 'Collection name',
+  'dialog.deleteCollection': 'Delete collection “{{name}}”? Assets stay in the library.',
+  'toolbar.search': 'Search effects, packs, folders, tags',
+  'toolbar.all': 'All',
+  'toolbar.transitions': 'Transitions',
+  'toolbar.overlays': 'Overlays',
+  'toolbar.sounds': 'Sounds',
+  'toolbar.sort': 'Sort assets',
+  'toolbar.name': 'Name',
+  'toolbar.recent': 'Recently added',
+  'toolbar.modified': 'Modified',
+  'toolbar.duration': 'Duration',
+  'toolbar.thumbnailSize': 'Thumbnail size',
+  'toolbar.videoEditor': 'Video editor',
+  'toolbar.toggleEditor': 'Toggle video editor',
+  'toolbar.rescan': 'Rescan packs',
+  'results.oneAsset': '1 asset',
+  'results.manyAssets': '{{count}} assets',
+  'results.oneSelected': '1 selected',
+  'results.manySelected': '{{count}} selected',
+  'results.loadMore': 'Load more',
+  'results.previewsOne': '1 preview queued',
+  'results.previewsMany': '{{count}} previews queued',
+  'results.cacheReady': 'Preview cache ready',
+  'sidebar.addPack': 'Add Pack',
+  'sidebar.library': 'Asset library',
+  'sidebar.allAssets': 'All assets',
+  'sidebar.favorites': 'Favorites',
+  'sidebar.packs': 'Packs',
+  'sidebar.noPacks': 'No packs yet',
+  'sidebar.relinkPack': 'Relink pack',
+  'sidebar.relinkNamed': 'Relink {{name}}',
+  'sidebar.collections': 'Collections',
+  'sidebar.createCollection': 'Create collection',
+  'sidebar.noCollections': 'No collections',
+  'sidebar.renameCollection': 'Rename collection',
+  'sidebar.renameNamed': 'Rename {{name}}',
+  'sidebar.deleteCollection': 'Delete collection',
+  'sidebar.deleteNamed': 'Delete {{name}}',
+  'sidebar.tags': 'Tags',
+  'sidebar.language': 'Language',
+  'grid.removeFavorite': 'Remove favorite',
+  'grid.addFavorite': 'Add favorite',
+  'grid.selectedDuration': 'Selected trim duration',
+  'grid.originalDuration': 'Original duration',
+  'grid.missing': 'Missing',
+  'grid.buildingPreview': 'Building preview',
+  'grid.emptyTitle': 'No assets found',
+  'grid.emptyBody': 'Add a pack or change the active filters.',
+  'inspector.close': 'Close video editor',
+  'inspector.nothingSelected': 'Nothing selected',
+  'inspector.chooseClip': 'Choose a clip to preview, trim, or organize it.',
+  'inspector.selected': '{{count}} selected',
+  'inspector.batchEdit': 'Batch edit',
+  'inspector.organize': 'Organize',
+  'inspector.assetType': 'Asset type',
+  'inspector.mixed': 'Mixed',
+  'inspector.overlayMode': 'Overlay mode',
+  'inspector.rawVideo': 'Raw video',
+  'inspector.alpha': 'Alpha',
+  'inspector.screenAdd': 'Screen / Add',
+  'inspector.tags': 'Tags',
+  'inspector.tagsPlaceholder': 'Add tags, separated by commas',
+  'inspector.fileDetails': 'File details',
+  'inspector.pack': 'Pack',
+  'inspector.codec': 'Codec',
+  'inspector.size': 'Size',
+  'inspector.frame': 'Frame',
+  'inspector.audio': 'Audio',
+  'inspector.compatibility': 'Compatibility',
+  'inspector.unknown': 'Unknown',
+  'inspector.screenHint': 'Use Screen/Add blend mode above your footage.',
+  'inspector.reveal': 'Reveal file',
+  'inspector.rebuild': 'Rebuild preview',
+  'compat.verified': 'Verified',
+  'compat.expected': 'Expected',
+  'compat.unsupported': 'Unsupported',
+  'trim.rendering': 'Rendering video',
+  'trim.ready': 'Ready to drag',
+  'trim.failed': 'Render failed',
+  'trim.rebuild': 'Needs rebuild',
+  'trim.original': 'Original file',
+  'trim.aria': 'Video range and rotation editor',
+  'trim.clipRange': 'Clip range',
+  'trim.nonDestructive': 'Non-destructive',
+  'trim.pause': 'Pause',
+  'trim.play': 'Play range',
+  'trim.rotateLeft': 'Rotate video left 90 degrees',
+  'trim.rotateRight': 'Rotate video right 90 degrees',
+  'trim.fullscreen': 'View video fullscreen',
+  'trim.volume': 'Preview volume',
+  'trim.mute': 'Mute preview',
+  'trim.unmute': 'Unmute preview',
+  'trim.noAudio': 'No audio track',
+  'trim.in': 'In',
+  'trim.out': 'Out',
+  'trim.previewRange': 'Preview selected range',
+  'trim.sourcePercent': '{{percent}}% of source',
+  'trim.renderingAction': 'Rendering...',
+  'trim.updateVideo': 'Update video',
+  'trim.prepareVideo': 'Prepare video',
+  'trim.dragPrepared': 'Drag uses the prepared video',
+  'trim.editPrompt': 'Trim or rotate, then prepare',
+  'trim.reset': 'Reset video edits',
+  'trim.resetTitle': 'Reset range and rotation',
+  'quick.aria': 'Quick Look: {{name}}',
+  'quick.close': 'Close Quick Look',
+  'quick.unknownDuration': 'Unknown duration',
+  'quick.context': 'Context',
+  'quick.original': 'Original',
+  'kind.transition': 'Transition',
+  'kind.overlay': 'Overlay',
+  'kind.sound': 'Sound',
+  'kind.unknown': 'Unknown'
+} as const
+
+type TranslationKey = keyof typeof en
+
+const de: Record<TranslationKey, string> = {
+  'app.ready': 'Bereit',
+  'app.pack': 'Pack',
+  'app.collection': 'Sammlung',
+  'app.favorites': 'Favoriten',
+  'app.entireLibrary': 'Gesamte Bibliothek',
+  'app.scanningProgress': 'Scan {{current}} / {{total}}',
+  'app.previewProgress': 'Vorschauen {{current}} / {{total}}',
+  'app.draggedOne': '1 Asset gezogen{{prepared}}.',
+  'app.draggedMany': '{{count}} Assets gezogen{{prepared}}.',
+  'app.preparedCount': ' ({{count}} vorbereitet)',
+  'app.dragFailed': 'Natives Ziehen fehlgeschlagen.',
+  'app.addingPack': 'Effekt-Pack wird hinzugefügt...',
+  'app.importedOne': '1 neues Asset importiert.',
+  'app.importedMany': '{{count}} neue Assets importiert.',
+  'app.scanningPacks': 'Packs werden gescannt...',
+  'app.scanComplete': 'Pack-Scan abgeschlossen.',
+  'app.resettingEdit': 'Video-Bearbeitung wird zurückgesetzt...',
+  'app.renderingEdit': 'Video-Bearbeitung wird gerendert...',
+  'app.editReset': 'Video-Bearbeitung zurückgesetzt. Beim Ziehen wird die Originaldatei verwendet.',
+  'app.editReady': 'Video-Bearbeitung bereit. Beim Ziehen wird das vorbereitete Video verwendet.',
+  'dialog.collectionName': 'Name der Sammlung',
+  'dialog.deleteCollection': 'Sammlung „{{name}}“ löschen? Die Assets bleiben in der Bibliothek.',
+  'toolbar.search': 'Effekte, Packs, Ordner und Tags durchsuchen',
+  'toolbar.all': 'Alle',
+  'toolbar.transitions': 'Übergänge',
+  'toolbar.overlays': 'Overlays',
+  'toolbar.sounds': 'Sounds',
+  'toolbar.sort': 'Assets sortieren',
+  'toolbar.name': 'Name',
+  'toolbar.recent': 'Zuletzt hinzugefügt',
+  'toolbar.modified': 'Geändert',
+  'toolbar.duration': 'Dauer',
+  'toolbar.thumbnailSize': 'Vorschaugröße',
+  'toolbar.videoEditor': 'Video-Editor',
+  'toolbar.toggleEditor': 'Video-Editor ein-/ausblenden',
+  'toolbar.rescan': 'Packs neu scannen',
+  'results.oneAsset': '1 Asset',
+  'results.manyAssets': '{{count}} Assets',
+  'results.oneSelected': '1 ausgewählt',
+  'results.manySelected': '{{count}} ausgewählt',
+  'results.loadMore': 'Mehr laden',
+  'results.previewsOne': '1 Vorschau in Warteschlange',
+  'results.previewsMany': '{{count}} Vorschauen in Warteschlange',
+  'results.cacheReady': 'Vorschau-Cache bereit',
+  'sidebar.addPack': 'Pack hinzufügen',
+  'sidebar.library': 'Asset-Bibliothek',
+  'sidebar.allAssets': 'Alle Assets',
+  'sidebar.favorites': 'Favoriten',
+  'sidebar.packs': 'Packs',
+  'sidebar.noPacks': 'Noch keine Packs',
+  'sidebar.relinkPack': 'Pack neu verknüpfen',
+  'sidebar.relinkNamed': '{{name}} neu verknüpfen',
+  'sidebar.collections': 'Sammlungen',
+  'sidebar.createCollection': 'Sammlung erstellen',
+  'sidebar.noCollections': 'Keine Sammlungen',
+  'sidebar.renameCollection': 'Sammlung umbenennen',
+  'sidebar.renameNamed': '{{name}} umbenennen',
+  'sidebar.deleteCollection': 'Sammlung löschen',
+  'sidebar.deleteNamed': '{{name}} löschen',
+  'sidebar.tags': 'Tags',
+  'sidebar.language': 'Sprache',
+  'grid.removeFavorite': 'Aus Favoriten entfernen',
+  'grid.addFavorite': 'Zu Favoriten hinzufügen',
+  'grid.selectedDuration': 'Dauer des gewählten Zuschnitts',
+  'grid.originalDuration': 'Originaldauer',
+  'grid.missing': 'Fehlt',
+  'grid.buildingPreview': 'Vorschau wird erstellt',
+  'grid.emptyTitle': 'Keine Assets gefunden',
+  'grid.emptyBody': 'Füge ein Pack hinzu oder ändere die aktiven Filter.',
+  'inspector.close': 'Video-Editor schließen',
+  'inspector.nothingSelected': 'Nichts ausgewählt',
+  'inspector.chooseClip': 'Wähle einen Clip zum Vorschauen, Zuschneiden oder Organisieren.',
+  'inspector.selected': '{{count}} ausgewählt',
+  'inspector.batchEdit': 'Stapelbearbeitung',
+  'inspector.organize': 'Organisieren',
+  'inspector.assetType': 'Asset-Typ',
+  'inspector.mixed': 'Gemischt',
+  'inspector.overlayMode': 'Overlay-Modus',
+  'inspector.rawVideo': 'Unverarbeitetes Video',
+  'inspector.alpha': 'Alpha',
+  'inspector.screenAdd': 'Negativ multiplizieren / Addieren',
+  'inspector.tags': 'Tags',
+  'inspector.tagsPlaceholder': 'Tags mit Kommas trennen',
+  'inspector.fileDetails': 'Dateidetails',
+  'inspector.pack': 'Pack',
+  'inspector.codec': 'Codec',
+  'inspector.size': 'Größe',
+  'inspector.frame': 'Bildgröße',
+  'inspector.audio': 'Audio',
+  'inspector.compatibility': 'Kompatibilität',
+  'inspector.unknown': 'Unbekannt',
+  'inspector.screenHint':
+    'Lege den Clip über dein Material und nutze „Negativ multiplizieren“ oder „Addieren“.',
+  'inspector.reveal': 'Datei anzeigen',
+  'inspector.rebuild': 'Vorschau neu erstellen',
+  'compat.verified': 'Verifiziert',
+  'compat.expected': 'Voraussichtlich',
+  'compat.unsupported': 'Nicht unterstützt',
+  'trim.rendering': 'Video wird gerendert',
+  'trim.ready': 'Bereit zum Ziehen',
+  'trim.failed': 'Rendern fehlgeschlagen',
+  'trim.rebuild': 'Neuaufbau nötig',
+  'trim.original': 'Originaldatei',
+  'trim.aria': 'Editor für Videobereich und Drehung',
+  'trim.clipRange': 'Clip-Bereich',
+  'trim.nonDestructive': 'Nicht destruktiv',
+  'trim.pause': 'Pause',
+  'trim.play': 'Bereich abspielen',
+  'trim.rotateLeft': 'Video um 90 Grad nach links drehen',
+  'trim.rotateRight': 'Video um 90 Grad nach rechts drehen',
+  'trim.fullscreen': 'Video im Vollbild anzeigen',
+  'trim.volume': 'Vorschau-Lautstärke',
+  'trim.mute': 'Vorschau stummschalten',
+  'trim.unmute': 'Vorschau einschalten',
+  'trim.noAudio': 'Keine Audiospur',
+  'trim.in': 'In',
+  'trim.out': 'Out',
+  'trim.previewRange': 'Ausgewählten Bereich abspielen',
+  'trim.sourcePercent': '{{percent}} % der Quelle',
+  'trim.renderingAction': 'Wird gerendert...',
+  'trim.updateVideo': 'Video aktualisieren',
+  'trim.prepareVideo': 'Video vorbereiten',
+  'trim.dragPrepared': 'Beim Ziehen wird das vorbereitete Video verwendet',
+  'trim.editPrompt': 'Zuschneiden oder drehen und anschließend vorbereiten',
+  'trim.reset': 'Video-Bearbeitung zurücksetzen',
+  'trim.resetTitle': 'Bereich und Drehung zurücksetzen',
+  'quick.aria': 'Schnellvorschau: {{name}}',
+  'quick.close': 'Schnellvorschau schließen',
+  'quick.unknownDuration': 'Unbekannte Dauer',
+  'quick.context': 'Kontext',
+  'quick.original': 'Original',
+  'kind.transition': 'Übergang',
+  'kind.overlay': 'Overlay',
+  'kind.sound': 'Sound',
+  'kind.unknown': 'Unbekannt'
+}
+
+const errorTranslations: Record<string, string> = {
+  'Asset was not found.': 'Das Asset wurde nicht gefunden.',
+  'Asset is not available for dragging.': 'Das Asset ist nicht zum Ziehen verfügbar.',
+  'Prepare the selected video edit before dragging it.':
+    'Bereite die ausgewählte Video-Bearbeitung vor dem Ziehen vor.',
+  'Asset file is missing.': 'Die Asset-Datei fehlt.',
+  'Native drag failed.': 'Natives Ziehen fehlgeschlagen.',
+  'Select at least one asset.': 'Wähle mindestens ein Asset aus.',
+  'Only video assets can be trimmed.': 'Nur Video-Assets können bearbeitet werden.',
+  'The video is not available for trimming.': 'Das Video ist nicht zur Bearbeitung verfügbar.',
+  'Choose a valid range of at least 0.1 seconds.':
+    'Wähle einen gültigen Bereich von mindestens 0,1 Sekunden.'
+}
+
+function interpolate(template: string, variables: Record<string, string | number> = {}): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => String(variables[name] ?? ''))
+}
+
+interface I18nValue {
+  language: Language
+  setLanguage: (language: Language) => void
+  t: (key: TranslationKey, variables?: Record<string, string | number>) => string
+  kind: (kind: AssetKind) => string
+  error: (message: string) => string
+}
+
+const I18nContext = createContext<I18nValue | null>(null)
+
+export function I18nProvider({ children }: { children: ReactNode }): JSX.Element {
+  const [language, setLanguageState] = useState<Language>(() => {
+    const stored = window.localStorage.getItem('clipdock.language')
+    if (stored === 'de' || stored === 'en') return stored
+    return window.navigator.language.toLowerCase().startsWith('de') ? 'de' : 'en'
+  })
+
+  const setLanguage = (nextLanguage: Language): void => {
+    window.localStorage.setItem('clipdock.language', nextLanguage)
+    setLanguageState(nextLanguage)
+  }
+
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
+
+  const value = useMemo<I18nValue>(() => {
+    const dictionary = language === 'de' ? de : en
+    return {
+      language,
+      setLanguage,
+      t: (key, variables) => interpolate(dictionary[key], variables),
+      kind: (assetKind) => dictionary[`kind.${assetKind}`],
+      error: (message) => (language === 'de' ? (errorTranslations[message] ?? message) : message)
+    }
+  }, [language])
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+}
+
+export function useI18n(): I18nValue {
+  const value = useContext(I18nContext)
+  if (!value) throw new Error('useI18n must be used inside I18nProvider.')
+  return value
+}

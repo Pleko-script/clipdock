@@ -1,77 +1,128 @@
 # ClipDock design system
 
-## Product principle
+## Direction: Obsidian Edit Bay
 
-ClipDock is a fast staging surface between an effect library and a video editor. The grid is the product: controls stay compact, metadata stays secondary, and every asset remains recognizably draggable media.
+ClipDock is a quiet staging surface between an effect library and a video editor. The visual language is deliberately neutral, dense, and media-first: near-black work surfaces, subtle gray layers, precise borders, and color reserved for state. It should feel like editing equipment, not a generic dashboard.
+
+The memorable interaction is the clip range: a large video stage over one physical timeline with two explicit In and Out handles.
+
+## Research principles
+
+- Dark interfaces use progressively lighter neutral layers to establish depth instead of colored cards. This follows the [Carbon dark-theme layering model](https://carbondesignsystem.com/elements/color/overview/).
+- Hierarchy comes from size, weight, and spacing. Avoiding tiny all-caps labels reduces visual noise, consistent with [Atlassian's typography guidance](https://atlassian.design/foundations/typography/applying-typography).
+- The range control follows the [WAI-ARIA multi-thumb slider pattern](https://www.w3.org/WAI/ARIA/apg/patterns/slider-multithumb/): both thumbs remain in a constant tab order, expose their dependent limits, and support keyboard operation.
+- Technical metadata uses progressive disclosure. The primary path stays visible; supporting file details remain one explicit action away.
 
 ## Visual tokens
 
-| Token          | Value     | Use                                 |
-| -------------- | --------- | ----------------------------------- |
-| Background     | `#0B0D10` | Application canvas and media wells  |
-| Surface        | `#15191F` | Cards and fields                    |
-| Raised surface | `#1B2027` | Hover and selected controls         |
-| Line           | `#2A313B` | Dividers and quiet borders          |
-| Text           | `#F2F5F7` | Primary labels                      |
-| Secondary text | `#8F9AA8` | Metadata and inactive navigation    |
-| Selection      | `#55C2FF` | Focus, selection, native drag state |
-| Favorite       | `#F6C85F` | Favorite state only                 |
-| Error          | `#FF6B7A` | Missing media and failures          |
+| Token          | Value     | Use                                     |
+| -------------- | --------- | --------------------------------------- |
+| Background     | `#080909` | Global canvas                           |
+| Layer 0        | `#0B0C0D` | Sidebar, toolbar, video editor          |
+| Layer 1        | `#111214` | Cards, fields, quiet controls           |
+| Layer 2        | `#17191B` | Selected navigation and raised controls |
+| Hover          | `#1C1E20` | Interactive hover state                 |
+| Subtle border  | `#25272A` | Structural division                     |
+| Strong border  | `#393C40` | Hover and active control boundaries     |
+| Primary text   | `#ECECEA` | Titles and values                       |
+| Secondary text | `#A2A5A8` | Labels and supporting content           |
+| Tertiary text  | `#6E7276` | Counts and low-priority context         |
+| Favorite       | `#D7B768` | Favorite state only                     |
+| Success        | `#78BC98` | Ready and verified states               |
+| Warning        | `#C9A966` | Pending and expected states             |
+| Error          | `#D9777F` | Missing media and failures              |
 
-Typography uses bundled IBM Plex Sans at 400/500/600 and IBM Plex Mono for timecodes, counts, and technical media information. The base spacing unit is 4 px; common gaps are 8, 12, 16, and 24 px. Controls use 5–8 px radii; the interface avoids decorative gradients except subtle media placeholders and contrast masks.
+White-gray is the selection and focus accent. Blue is not part of the base interface. Surfaces are flat; decorative gradients, colored glows, and glass cards are not used.
+
+## Typography
+
+- **Commissioner Variable** is the UI family. Use weight and size for hierarchy rather than uppercase tracking.
+- **Fragment Mono** is reserved for timecodes, durations, counts, codecs, and status output.
+- The normal UI floor is 11–12 px. Primary asset and editor titles are 13–18 px.
+- Labels use sentence case. ALL CAPS is limited to real format abbreviations such as MP4.
+
+Both families are bundled locally. The UI never requires a network connection.
 
 ## Layout
 
-- Sidebar: 228 px, packs and organization.
-- Toolbar: 58 px, search, type tabs, sort, density, Inspector, and rescan.
-- Results bar: 31 px, current scope and selection count.
-- Grid: remaining space, row-virtualized, 14 px gaps, responsive columns.
-- Inspector: optional 318 px panel for classification and technical details.
-- Status bar: 25 px for scan and preview progress.
-- Quick Look: centered modal up to 1040 × 710 px with Context/Original switching.
+- Sidebar: 214 px.
+- Toolbar: 56 px.
+- Results bar: 31 px.
+- Video editor: centered above the asset results and collapsible, without an internal scroll container.
+- Editor columns: Organize on the left, media/range in the center, and file details on the right.
+- Grid: all remaining space below the editor, row-virtualized with 14 px gaps.
+- Application minimum: 900 × 600 px.
 
-At widths below 1180 px the Inspector collapses so the grid remains useful. The minimum application width is 900 px.
+The editor hierarchy is fixed:
 
-## Asset cards and states
+1. Asset identity.
+2. Large adaptive media stage.
+3. In/Out range.
+4. Always-visible organize controls on the left.
+5. Always-visible file details on the right.
 
-Cards use a 16:9 full-bleed visual, then two compact text lines. Asset kind appears at top left; favorite at top right; alpha, format, and duration badges sit at the lower edge. Technical badges use IBM Plex Mono.
+Notes are not part of the current UI. Pack, codec, size, resolution, compatibility, reveal, and preview-rebuild controls live inside **File details**.
 
-- Default: transparent border, quiet shadow.
-- Hover: raised by 1 px and bordered; preview starts after 250 ms for video or 300 ms for sound.
-- Selected: blue border and halo.
-- Keyboard-active: secondary outer focus ring.
-- Favorite: yellow heart, always visible.
-- Missing/error: reduced card opacity and explicit red overlay; the item remains selectable for recovery.
-- Preview pending: small status label without blocking the card.
+## Clip range
 
-Only three video hover previews may run at once. Only one sound may play at once. Leaving a card stops its hover preview.
+- Portrait and landscape video share a centered square stage between 230 and 480 px. `object-fit: contain` preserves the full frame before and after quarter-turn rotation.
+- The player uses minimal custom playback and fullscreen controls.
+- Left and right rotation controls move in 90-degree steps and display the current angle.
+- Preview audio has a persistent volume slider and mute control; videos without audio show an explicit no-audio state.
+- In and Out share one visible rail. There are never two separate slider tracks.
+- Each thumb is a focusable ARIA slider with a visible timecode and a dependent min/max value.
+- Pointer drag snaps to the source frame interval.
+- Arrow keys move one frame; Page Up/Down move ten frames; Home/End move to the allowed boundary.
+- Thumbs never cross and the range is at least 100 ms.
+- Playback loops between In and Out.
+- Applying a range or rotation renders a cached derivative without changing the source file.
+- Opaque ranges use high-quality H.264 MP4. Alpha ranges use ProRes 4444 MOV.
+- A prepared edit is dragged instead of the original; Reset restores original-file drag behavior.
 
-## Preview rules
+## Language
 
-- Transition: local Demo A, transition source, local Demo B.
-- Alpha overlay: source composited over a generated neutral test scene.
-- Screen overlay: source blended over the same scene with Screen mode.
-- Raw video: original video scaled into the preview frame.
-- Sound: cached waveform and original audio playback.
+- Every visible workflow string is centralized in `i18n.tsx`.
+- English and German can be switched instantly from the sidebar.
+- The selected language and preview volume are stored locally in the renderer profile.
+- New copy must ship with both translations in the same change.
 
-Generated video previews are silent, no longer than four seconds, H.264 MP4, and at most 480p. The thumbnail comes from the generated context preview. Quick Look exposes Context and Original whenever both exist.
+## Asset cards
+
+Cards consist of a full-bleed preview and two text lines. The default card does not show codec, format, folder path, or an `unknown` type badge.
+
+- Kind appears only when it adds information.
+- Duration is the only persistent media overlay; a scissors icon marks a selected range.
+- Favorite appears on hover or when active.
+- Selection uses a neutral border, never a colored glow.
+- Missing media and pending preview states remain explicit text states.
+- Hover preview starts after 250 ms for video or 300 ms for sound.
+- No more than three video previews and one sound preview may run at once.
 
 ## Interaction contract
 
-- `/` focuses search; its query is debounced by 150 ms.
+- `/` focuses search; search is debounced by 150 ms.
 - Arrow keys move the active asset.
 - `Space` opens Quick Look; `Esc` closes it and stops playback.
 - `F` toggles favorite.
 - `Ctrl/Cmd+A`, Shift-click, and Ctrl/Cmd-click provide multi-selection.
 - `+` and `-` adjust thumbnail density.
-- Dragging any selected card starts one native OS drag containing the real source paths.
-- Dropping selected cards on a Collection adds references; it never moves files.
-- Relinking a pack rewrites its root while preserving relative paths and asset metadata.
+- Native drag contains original paths or prepared edit paths where configured.
+- Dropping on a Collection adds references and never moves source files.
 
-## Content and errors
+## Anti-slop guardrails
 
-UI copy is English and kept short enough for later localization. Errors state what failed and keep recovery nearby. Unsupported files are ignored during scanning rather than shown as broken assets. Missing supported files remain visible. Compatibility uses `Verified`, `Expected`, and `Unsupported` literally; it never promises universal editor support.
+- Do not add decorative pills, gradients, colored glows, or large rounded cards by default.
+- Do not expose technical metadata before the primary media task.
+- Do not repeat information across card, toolbar, and editor.
+- Do not use disabled primary buttons as persistent status panels.
+- Do not add new accent colors for asset categories.
+- Do not shrink media to make secondary controls fit; secondary content scrolls or collapses.
+- Every visible label must help selection, preview, organization, or recovery.
 
 ## Accessibility
 
-All icon-only buttons require an accessible name or title. Keyboard focus uses the selection blue with a 2 px outline. Text and important state borders maintain strong contrast on graphite surfaces. Reduced-motion settings collapse animations to 1 ms. State is never communicated by color alone: icons, labels, borders, or text accompany it.
+- Every icon-only button has an accessible name.
+- Keyboard focus uses a two-pixel neutral outline with at least 3:1 contrast.
+- Slider values expose readable timecodes through `aria-valuetext`.
+- State is communicated by text and icon in addition to color.
+- Reduced-motion preference collapses transitions and animations to 1 ms.

@@ -15,6 +15,8 @@ export const SUPPORTED_VIDEO_EXTENSIONS = [
 
 export const SUPPORTED_AUDIO_EXTENSIONS = ['.wav', '.mp3', '.aac', '.m4a', '.flac', '.ogg'] as const
 
+export const MIN_VIDEO_TRIM_MS = 100
+
 export type SupportedVideoExtension = (typeof SUPPORTED_VIDEO_EXTENSIONS)[number]
 export type SupportedAudioExtension = (typeof SUPPORTED_AUDIO_EXTENSIONS)[number]
 
@@ -37,6 +39,8 @@ export type CompatibilityLevel = 'verified' | 'expected' | 'unsupported'
 export type AssetSortMode = 'name' | 'modified' | 'duration' | 'recent'
 export type AssetStatus = 'ready' | 'missing' | 'error'
 export type PreviewStatus = 'pending' | 'ready' | 'failed'
+export type TrimStatus = 'none' | 'pending' | 'ready' | 'failed'
+export type VideoRotation = 0 | 90 | 180 | 270
 
 export interface AssetPackSummary {
   id: string
@@ -87,6 +91,11 @@ export interface AssetSummary {
   collectionIds: string[]
   status: AssetStatus
   previewStatus: PreviewStatus
+  trimStartMs: number | null
+  trimEndMs: number | null
+  rotationDegrees: VideoRotation
+  trimStatus: TrimStatus
+  trimErrorMessage: string | null
   thumbnailUrl: string | null
   previewUrl: string | null
   mediaUrl: string
@@ -129,6 +138,13 @@ export interface AssetUpdateRequest {
   note?: string
 }
 
+export interface AssetTrimRequest {
+  assetId: string
+  startMs: number | null
+  endMs: number | null
+  rotationDegrees: VideoRotation
+}
+
 export interface AssetScanResult {
   packId: string
   scannedFiles: number
@@ -152,6 +168,7 @@ export interface AssetDragRequest {
 export interface AssetDragEvent {
   type: 'drag-started' | 'drag-failed'
   assetIds: string[]
+  trimmedAssetIds?: string[]
   error?: ClipdockError
 }
 
@@ -162,6 +179,7 @@ export interface ClipdockApi {
   relinkPack: (packId: string) => Promise<ClipdockResult<AssetScanResult>>
   rescanPacks: (packIds?: string[]) => Promise<ClipdockResult<AssetScanResult[]>>
   updateAssets: (request: AssetUpdateRequest) => Promise<ClipdockResult<void>>
+  setAssetTrim: (request: AssetTrimRequest) => Promise<ClipdockResult<void>>
   toggleAssetFavorite: (assetId: string) => Promise<ClipdockResult<void>>
   createCollection: (name: string) => Promise<ClipdockResult<void>>
   renameCollection: (collectionId: string, name: string) => Promise<ClipdockResult<void>>

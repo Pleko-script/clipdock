@@ -11,7 +11,7 @@ A fast, local desktop library for **transition clips**, **video overlays**, and 
 [![Electron](https://img.shields.io/badge/Electron-39-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-[Features](#features) · [Quick start](#quick-start) · [Workflow](#workflow) · [Architecture](#architecture)
+[Features](#features) · [Quick start](#quick-start) · [Workflow](#workflow) · [Changelog](./CHANGELOG.md) · [Architecture](#architecture)
 
 </div>
 
@@ -28,21 +28,25 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 
 - **See the effect before using it.** Transitions and overlays are rendered against local demo scenes; sounds get cached waveforms.
 - **Stay inside your existing workflow.** Drag one or multiple real media files into DaVinci Resolve, Adobe Premiere Pro, or another editor.
-- **Organize without touching disk.** Packs, Collections, tags, notes, and favorites live in ClipDock while source files stay where they are.
+- **Organize without touching disk.** Packs, Collections, tags, and favorites live in ClipDock while source files stay where they are.
 - **Work without an account.** Everything—including metadata, search, and generated previews—runs locally.
 
 ## Features
 
-|              | Feature                   | What it does                                                                                                       |
-| ------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Browse**   | Virtualized asset grid    | Keeps large libraries responsive while showing full-bleed thumbnails.                                              |
-| **Preview**  | Contextual playback       | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.                      |
-| **Find**     | Search and filters        | Searches filenames, packs, folders, tags, and notes; filters by asset type, format, pack, Collection, or favorite. |
-| **Organize** | Packs and Collections     | Treats each imported folder as a pack and its subfolders as categories. Collections never move files.              |
-| **Classify** | Automatic asset detection | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.                   |
-| **Inspect**  | Media metadata            | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.             |
-| **Deliver**  | Native multi-file drag    | Resolves and validates real local paths in Electron's main process before starting the OS drag.                    |
-| **Recover**  | Missing-media relink      | Points a moved pack at a new root while preserving favorites, tags, notes, and Collections.                        |
+|              | Feature                   | What it does                                                                                                |
+| ------------ | ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Browse**   | Virtualized asset grid    | Keeps large libraries responsive while showing full-bleed thumbnails.                                       |
+| **Preview**  | Contextual playback       | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.               |
+| **Find**     | Search and filters        | Searches filenames, packs, folders, and tags; filters by asset type, format, pack, Collection, or favorite. |
+| **Organize** | Packs and Collections     | Treats each imported folder as a pack and its subfolders as categories. Collections never move files.       |
+| **Classify** | Automatic asset detection | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.            |
+| **Inspect**  | Media metadata            | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.      |
+| **Trim**     | Non-destructive In / Out  | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                   |
+| **Rotate**   | Quarter-turn video edits  | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                  |
+| **Listen**   | Preview volume            | Plays available clip audio with a persistent volume slider and mute control.                                |
+| **Language** | Deutsch / English         | Switches the complete interface instantly and remembers the local preference.                               |
+| **Deliver**  | Native multi-file drag    | Resolves and validates real local paths in Electron's main process before starting the OS drag.             |
+| **Recover**  | Missing-media relink      | Points a moved pack at a new root while preserving favorites, tags, and Collections.                        |
 
 ## Workflow
 
@@ -56,7 +60,9 @@ ClipDock scans supported media, stores metadata first, and generates previews in
 
 ### 3. Drag into the edit
 
-Drag a card—or a multi-selection—into your editor:
+For a video, open the centered editor above the asset grid to set optional **In** and **Out** points or rotate the frame in 90° steps. Organizing controls stay visible on the left and file details on the right, without an internal editor scrollbar. The square `contain` preview keeps portrait and landscape footage fully visible. When the source has audio, the preview volume and mute controls apply immediately and persist locally. ClipDock renders the edit into its local cache; opaque footage becomes a high-quality H.264 MP4 and alpha footage becomes a ProRes 4444 MOV. Resetting returns the card to its original file.
+
+Drag a card—or a multi-selection—into your editor. Cards with a prepared range or rotation drag the cached result; all other cards drag their original media:
 
 | Asset          | Typical timeline placement         | Context preview                           |
 | -------------- | ---------------------------------- | ----------------------------------------- |
@@ -125,7 +131,7 @@ Format support does not guarantee that every codec inside a container is accepte
 ClipDock is deliberately offline and account-free:
 
 - Source files are referenced in place and are **never moved, modified, or deleted**.
-- SQLite data and generated previews stay under Electron's local `userData/clipdock-library` directory.
+- SQLite data, generated previews, and non-destructive trimmed copies stay under Electron's local `userData/clipdock-library` directory.
 - There is no cloud synchronization, telemetry, remote logging, or AI generation.
 - The renderer has no direct file-system access. SQLite, FFmpeg, FFprobe, dialogs, shell actions, and native drag operations stay behind a typed preload bridge in the main process.
 - Context isolation, renderer sandboxing, disabled Node integration, and a constrained `clipdock-media://` protocol reduce the renderer's privileges.

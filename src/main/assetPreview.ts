@@ -1,12 +1,9 @@
-import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { AssetSummary } from '../shared/clipdock'
+import { runFfmpeg } from './mediaProcess'
 
-const requireFromMain = createRequire(__filename)
-const ffmpegPath = requireFromMain('ffmpeg-static') as string | null
 const PREVIEW_PIPELINE_VERSION = 3
 
 export interface AssetPreviewResult {
@@ -21,33 +18,6 @@ async function writePlaceholderThumbnail(filePath: string, label: string): Promi
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, svg, 'utf8')
   return path
-}
-
-async function runFfmpeg(args: string[], timeoutMs = 60_000): Promise<void> {
-  if (!ffmpegPath) throw new Error('Bundled FFmpeg is unavailable.')
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(ffmpegPath, args, { windowsHide: true })
-    const errors: Buffer[] = []
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error('FFmpeg preview generation timed out.'))
-    }, timeoutMs)
-    child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0) resolve()
-      else
-        reject(
-          new Error(
-            Buffer.concat(errors).toString('utf8').trim() || 'FFmpeg preview generation failed.'
-          )
-        )
-    })
-  })
 }
 
 function encodeArgs(outputPath: string): string[] {

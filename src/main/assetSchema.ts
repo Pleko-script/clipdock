@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AssetStatus } from '../shared/clipdock'
 import { createAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 
-export const ASSET_SCHEMA_VERSION = 4
+export const ASSET_SCHEMA_VERSION = 6
 
 interface LegacySourceRow {
   id: string
@@ -87,6 +87,12 @@ function createTables(database: DatabaseSync): void {
       preview_status TEXT NOT NULL DEFAULT 'pending' CHECK (preview_status IN ('pending','ready','failed')),
       thumbnail_path TEXT,
       preview_path TEXT,
+      trim_start_ms INTEGER,
+      trim_end_ms INTEGER,
+      rotation_degrees INTEGER NOT NULL DEFAULT 0 CHECK (rotation_degrees IN (0,90,180,270)),
+      trimmed_path TEXT,
+      trim_status TEXT NOT NULL DEFAULT 'none' CHECK (trim_status IN ('none','pending','ready','failed')),
+      trim_error_message TEXT,
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL,
       last_error_message TEXT
@@ -142,6 +148,28 @@ function createTables(database: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_preview_jobs_queue ON preview_jobs(status, priority DESC, created_at_ms);
   `)
   createAssetSearchIndex(database)
+}
+
+function ensureTrimColumns(database: DatabaseSync): void {
+  const columns = new Set(
+    (database.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>).map(
+      (column) => column.name
+    )
+  )
+  const additions: ReadonlyArray<[string, string]> = [
+    ['trim_start_ms', 'INTEGER'],
+    ['trim_end_ms', 'INTEGER'],
+    ['rotation_degrees', 'INTEGER NOT NULL DEFAULT 0 CHECK (rotation_degrees IN (0,90,180,270))'],
+    ['trimmed_path', 'TEXT'],
+    [
+      'trim_status',
+      "TEXT NOT NULL DEFAULT 'none' CHECK (trim_status IN ('none','pending','ready','failed'))"
+    ],
+    ['trim_error_message', 'TEXT']
+  ]
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) database.exec(`ALTER TABLE assets ADD COLUMN ${name} ${definition}`)
+  }
 }
 
 function legacyRootPath(source: LegacySourceRow): string {
@@ -271,6 +299,10 @@ export function migrateAssetSchema(database: DatabaseSync, timestamp: number): v
   database.exec('BEGIN IMMEDIATE')
   try {
     createTables(database)
+    ensureTrimColumns(database)
+    database.exec(
+      'UPDATE assets SET rotation_degrees=0 WHERE rotation_degrees IS NULL OR rotation_degrees NOT IN (0,90,180,270)'
+    )
     migrateLegacy(database, timestamp)
     database.exec('COMMIT')
     database.exec(`PRAGMA user_version = ${ASSET_SCHEMA_VERSION}`)

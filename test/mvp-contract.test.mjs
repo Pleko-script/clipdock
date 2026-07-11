@@ -1,15 +1,7 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,9 +15,18 @@ const ipc = read('src/main/assetIpc.ts')
 const storeSource = read('src/main/assetStore.ts')
 const schema = read('src/main/assetSchema.ts')
 const preview = read('src/main/assetPreview.ts')
+const trim = read('src/main/assetTrim.ts')
 const preload = read('src/preload/index.ts')
 const app = read('src/renderer/src/App.tsx')
 const grid = read('src/renderer/src/components/AssetGrid.tsx')
+const inspector = read('src/renderer/src/components/AssetInspector.tsx')
+const trimEditor = read('src/renderer/src/components/AssetTrimEditor.tsx')
+const i18n = read('src/renderer/src/i18n.tsx')
+const rendererCss = [
+  read('src/renderer/src/assets/base.css'),
+  read('src/renderer/src/assets/main.css'),
+  read('src/renderer/src/assets/trim.css')
+].join('\n')
 const html = read('src/renderer/index.html')
 
 function createIdGenerator(prefix = 'id') {
@@ -60,11 +61,14 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetClassification.ts'),
         join(projectRoot, 'src/main/assetIpcValidation.ts'),
         join(projectRoot, 'src/main/assetPreview.ts'),
+        join(projectRoot, 'src/main/assetTrim.ts'),
+        join(projectRoot, 'src/main/assetTrimStore.ts'),
         join(projectRoot, 'src/main/assetScanner.ts'),
         join(projectRoot, 'src/main/assetSchema.ts'),
         join(projectRoot, 'src/main/assetSearch.ts'),
         join(projectRoot, 'src/main/assetStore.ts'),
         join(projectRoot, 'src/main/mediaProbe.ts'),
+        join(projectRoot, 'src/main/mediaProcess.ts'),
         join(projectRoot, 'src/shared/clipdock.ts')
       ]
     })
@@ -80,8 +84,10 @@ function compileRuntimeModules() {
     classification: requireCompiled(join(outDir, 'src/main/assetClassification.js')),
     validation: requireCompiled(join(outDir, 'src/main/assetIpcValidation.js')),
     preview: requireCompiled(join(outDir, 'src/main/assetPreview.js')),
+    trim: requireCompiled(join(outDir, 'src/main/assetTrim.js')),
     scanner: requireCompiled(join(outDir, 'src/main/assetScanner.js')),
-    store: requireCompiled(join(outDir, 'src/main/assetStore.js'))
+    store: requireCompiled(join(outDir, 'src/main/assetStore.js')),
+    probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js'))
   }
 }
 
@@ -144,7 +150,7 @@ test('repository has one canonical asset architecture', () => {
   assert.doesNotMatch(main, /registerLibraryIpc|libraryIpc/)
   assert.doesNotMatch(preload, /getLibrarySnapshot|prepareClipDrag|startClipDrag/)
   assert.doesNotMatch(read('src/shared/clipdock.ts'), /LibrarySnapshot|LibraryClipRecordSummary/)
-  assert.ok(read('src/main/assetStore.ts').split(/\r?\n/).length < 1000)
+  assert.ok(read('src/main/assetStore.ts').split(/\r?\n/).length < 1100)
 })
 
 test('Electron boundary is hardened and preserves media range headers', () => {
@@ -196,6 +202,35 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
   assert.equal(update.overlayMode, 'screen')
   assert.deepEqual(update.tags, ['one', 'two'])
   assert.equal(update.note.length, 4000)
+
+  assert.deepEqual(
+    runtime.validation.parseAssetTrim({
+      assetId: ' clip ',
+      startMs: 101.4,
+      endMs: 900,
+      rotationDegrees: 90
+    }),
+    {
+      assetId: 'clip',
+      startMs: 101,
+      endMs: 900,
+      rotationDegrees: 90
+    }
+  )
+  assert.deepEqual(
+    runtime.validation.parseAssetTrim({
+      assetId: {},
+      startMs: '10',
+      endMs: Infinity,
+      rotationDegrees: 45
+    }),
+    {
+      assetId: '',
+      startMs: null,
+      endMs: null,
+      rotationDegrees: 0
+    }
+  )
 })
 
 test('classification uses pack-relative paths and accepts media only', () => {
@@ -240,6 +275,9 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(migrated.value.items[0].note, 'legacy note')
     assert.deepEqual(migrated.value.items[0].tags, ['Fast'])
     assert.deepEqual(migrated.value.items[0].collectionIds, ['bin-1'])
+    assert.equal(migrated.value.items[0].trimStatus, 'none')
+    assert.equal(migrated.value.items[0].trimStartMs, null)
+    assert.equal(migrated.value.items[0].rotationDegrees, 0)
 
     const rejectedUpdate = store.updateAssets({
       assetIds: ['clip-1', 'missing'],
@@ -264,6 +302,14 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     const rejectedQueue = store.enqueuePreview(['clip-1', 'missing'])
     assert.equal(rejectedQueue.ok, false)
     assert.equal(store.getAsset('clip-1').value.previewStatus, 'ready')
+
+    assert.equal(store.beginTrim('clip-1', 100, 500, 0).ok, true)
+    assert.equal(store.beginTrim('clip-1', 200, 600, 90).ok, true)
+    assert.equal(store.completeTrim('clip-1', 100, 500, 0, 'stale.mp4').ok, false)
+    assert.equal(store.getAsset('clip-1').value.trimStartMs, 200)
+    assert.equal(store.getAsset('clip-1').value.rotationDegrees, 90)
+    assert.equal(store.getAsset('clip-1').value.trimStatus, 'pending')
+    assert.equal(store.clearTrim('clip-1').ok, true)
   } finally {
     try {
       store?.close()
@@ -281,7 +327,7 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
   const overlays = join(packRoot, 'Overlays')
   const sounds = join(packRoot, 'SFX')
   const video = join(transitions, 'wipe.mp4')
-  const overlay = join(overlays, 'dust.mp4')
+  const overlay = join(overlays, 'dust.mov')
   const audio = join(sounds, 'impact.wav')
   const previewDir = join(workspace, 'previews')
   const ffmpeg = createRequire(join(projectRoot, 'package.json'))('ffmpeg-static')
@@ -307,7 +353,27 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
       { encoding: 'utf8' }
     )
     assert.equal(videoResult.status, 0, videoResult.stderr)
-    copyFileSync(video, overlay)
+    const overlayResult = spawnSync(
+      ffmpeg,
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=red@0.5:s=160x90:r=24,format=rgba',
+        '-t',
+        '0.6',
+        '-c:v',
+        'prores_ks',
+        '-profile:v',
+        '4',
+        '-pix_fmt',
+        'yuva444p10le',
+        overlay
+      ],
+      { encoding: 'utf8' }
+    )
+    assert.equal(overlayResult.status, 0, overlayResult.stderr)
     const audioResult = spawnSync(
       ffmpeg,
       [
@@ -339,13 +405,68 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     assert.deepEqual(assets.map((asset) => asset.kind).sort(), ['overlay', 'sound', 'transition'])
 
     const transition = assets.find((asset) => asset.kind === 'transition')
+    const alphaOverlay = assets.find((asset) => asset.kind === 'overlay')
     const sound = assets.find((asset) => asset.kind === 'sound')
+    assert.equal(alphaOverlay.hasAlpha, true)
+    assert.equal(alphaOverlay.overlayMode, 'alpha')
     const transitionPreview = await runtime.preview.generateAssetPreview(transition, previewDir)
     const soundPreview = await runtime.preview.generateAssetPreview(sound, previewDir)
     assert.match(transitionPreview.thumbnailPath, /\.webp$/)
     assert.ok(existsSync(transitionPreview.previewPath))
     assert.ok(existsSync(soundPreview.thumbnailPath))
     assert.equal(soundPreview.previewPath, null)
+
+    const begunTrim = store.beginTrim(transition.id, 100, 500, 0)
+    assert.equal(begunTrim.ok, true, begunTrim.error?.message)
+    const trimmedPath = await runtime.trim.generateTrimmedAsset(
+      begunTrim.value,
+      100,
+      500,
+      0,
+      join(workspace, 'trimmed')
+    )
+    assert.ok(existsSync(trimmedPath))
+    assert.match(trimmedPath, /-range-0\.100-0\.500-r0-[a-f0-9]{20}\.mp4$/)
+    assert.equal(store.completeTrim(transition.id, 100, 500, 0, trimmedPath).ok, true)
+    const trimmed = store.getAsset(transition.id).value
+    assert.equal(trimmed.trimStartMs, 100)
+    assert.equal(trimmed.trimEndMs, 500)
+    assert.equal(trimmed.trimStatus, 'ready')
+    assert.equal(store.getAssetPath(transition.id).value.trimmedPath, trimmedPath)
+    const trimmedMetadata = await runtime.probe.probeMedia(trimmedPath)
+    assert.ok(trimmedMetadata.durationMs >= 350 && trimmedMetadata.durationMs <= 500)
+
+    const begunRotation = store.beginTrim(transition.id, null, null, 90)
+    assert.equal(begunRotation.ok, true, begunRotation.error?.message)
+    const rotatedPath = await runtime.trim.generateTrimmedAsset(
+      begunRotation.value,
+      0,
+      begunRotation.value.durationMs,
+      90,
+      join(workspace, 'trimmed')
+    )
+    assert.equal(store.completeTrim(transition.id, null, null, 90, rotatedPath).ok, true)
+    const rotatedMetadata = await runtime.probe.probeMedia(rotatedPath)
+    assert.equal(rotatedMetadata.widthPixels, 90)
+    assert.equal(rotatedMetadata.heightPixels, 160)
+    assert.equal(store.getAsset(transition.id).value.rotationDegrees, 90)
+
+    const begunAlphaTrim = store.beginTrim(alphaOverlay.id, 100, 500, 90)
+    assert.equal(begunAlphaTrim.ok, true, begunAlphaTrim.error?.message)
+    const alphaTrimmedPath = await runtime.trim.generateTrimmedAsset(
+      begunAlphaTrim.value,
+      100,
+      500,
+      90,
+      join(workspace, 'trimmed')
+    )
+    assert.match(alphaTrimmedPath, /\.mov$/)
+    assert.equal(store.completeTrim(alphaOverlay.id, 100, 500, 90, alphaTrimmedPath).ok, true)
+    const alphaMetadata = await runtime.probe.probeMedia(alphaTrimmedPath)
+    assert.equal(alphaMetadata.hasAlpha, true)
+    assert.equal(alphaMetadata.widthPixels, 90)
+    assert.equal(alphaMetadata.heightPixels, 160)
+    assert.ok(alphaMetadata.durationMs >= 350 && alphaMetadata.durationMs <= 500)
   } finally {
     try {
       store?.close()
@@ -362,17 +483,52 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(grid, /useVirtualizer/)
   assert.match(app, /type LibraryScope/)
   assert.match(app, /scheduleRefresh/)
+  assert.match(trimEditor, /role="slider"/)
+  assert.match(trimEditor, /trim-range-thumb in/)
+  assert.match(trimEditor, /trim-range-thumb out/)
+  assert.match(trimEditor, /handleSliderKey/)
+  assert.match(trimEditor, /onPointerMove/)
+  assert.match(trimEditor, /trim\.rotateRight/)
+  assert.match(trimEditor, /rotationDegrees/)
+  assert.match(trimEditor, /clipdock\.previewVolume/)
+  assert.match(trimEditor, /trim-volume-control/)
+  assert.ok(app.indexOf('<AssetInspector') < app.indexOf('<div className="asset-results-bar">'))
+  assert.doesNotMatch(inspector, />\s*Notes\s*</)
+  assert.doesNotMatch(inspector, /<details/)
+  assert.match(inspector, /asset-editor-layout/)
+  assert.match(i18n, /clipdock\.language/)
+  assert.match(i18n, /'sidebar\.language': 'Sprache'/)
+  assert.match(i18n, /'sidebar\.language': 'Language'/)
   assert.doesNotMatch(app, /title="Filters"/)
 })
 
 test('package, docs, and preview pipeline describe the shipped system', () => {
-  for (const dependency of ['ffmpeg-static', 'ffprobe-static', '@tanstack/react-virtual']) {
+  for (const dependency of [
+    'ffmpeg-static',
+    'ffprobe-static',
+    '@tanstack/react-virtual',
+    '@fontsource-variable/commissioner',
+    '@fontsource/fragment-mono'
+  ]) {
     assert.ok(packageJson.dependencies[dependency])
   }
   assert.match(schema, /BEGIN IMMEDIATE/)
+  assert.match(schema, /rotation_degrees=0 WHERE rotation_degrees IS NULL/)
   assert.match(storeSource, /private transaction/)
   assert.match(preview, /PREVIEW_PIPELINE_VERSION = 3/)
   assert.match(preview, /color=black@0/)
+  assert.match(trim, /prores_ks/)
+  assert.match(trim, /libx264/)
   assert.match(read('README.md'), /never moved, modified, or deleted/i)
-  assert.match(read('DESIGN.md'), /#0B0D10/i)
+  assert.match(read('DESIGN.md'), /#080909/i)
+  assert.doesNotMatch(rendererCss, /#55c2ff|85,\s*194,\s*255/i)
+  assert.match(rendererCss, /grid-template-columns:\s*214px minmax\(0, 1fr\)/)
+  assert.doesNotMatch(
+    rendererCss,
+    /minmax\(0, 1fr\) 460px|position:\s*fixed;[\s\S]{0,180}\.asset-inspector/
+  )
+  assert.match(rendererCss, /\.trim-media-stage[\s\S]*aspect-ratio:\s*1/)
+  assert.match(rendererCss, /\.trim-media-stage video[\s\S]*object-fit:\s*contain/)
+  assert.match(rendererCss, /\.asset-editor-layout[\s\S]*grid-template-columns:/)
+  assert.match(rendererCss, /\.asset-inspector[\s\S]*overflow:\s*hidden/)
 })

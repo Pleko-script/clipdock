@@ -7,6 +7,7 @@ import type {
   AssetPage,
   AssetQuery,
   AssetScanResult,
+  AssetTrimRequest,
   AssetUpdateRequest,
   ClipdockApi,
   ClipdockResult
@@ -73,6 +74,8 @@ const clipdock: ClipdockApi = Object.freeze({
       ...request,
       assetIds: limitedIds(request?.assetIds, 256)
     }),
+  setAssetTrim: (request: AssetTrimRequest) =>
+    invoke<void>(channels.setTrim, 'ClipDock could not prepare the selected range.', request),
   toggleAssetFavorite: (assetId: string) =>
     invoke<void>(channels.toggleFavorite, 'ClipDock could not update the favorite.', assetId),
   createCollection: (name: string) =>

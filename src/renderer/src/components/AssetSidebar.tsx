@@ -1,17 +1,7 @@
 import type { DragEvent, JSX } from 'react'
-import {
-  Boxes,
-  FolderHeart,
-  FolderOpen,
-  Heart,
-  Library,
-  Link2,
-  Pencil,
-  Plus,
-  Tags,
-  Trash2
-} from 'lucide-react'
+import { FolderHeart, FolderOpen, Heart, Library, Link2, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { AssetNavigationSnapshot } from '../../../shared/clipdock'
+import { useI18n } from '../i18n'
 
 function parseDraggedAssets(event: DragEvent): string[] {
   try {
@@ -59,22 +49,20 @@ export function AssetSidebar({
   onDeleteCollection: (id: string, currentName: string) => void
   onDropCollection: (assetIds: string[], collectionId: string) => void
 }): JSX.Element {
+  const { language, setLanguage, t } = useI18n()
   return (
     <aside className="asset-sidebar">
       <div className="asset-brand">
         <span className="asset-brand-mark">CD</span>
-        <div>
-          <strong>ClipDock</strong>
-          <span>Motion asset library</span>
-        </div>
+        <strong>ClipDock</strong>
       </div>
 
       <button type="button" className="add-pack-button" onClick={onAddPack} disabled={busy}>
         <Plus size={17} />
-        Add Pack
+        {t('sidebar.addPack')}
       </button>
 
-      <nav className="sidebar-nav" aria-label="Asset library">
+      <nav className="sidebar-nav" aria-label={t('sidebar.library')}>
         <button
           type="button"
           className={
@@ -83,24 +71,21 @@ export function AssetSidebar({
           onClick={onShowAll}
         >
           <Library size={17} />
-          <span>All assets</span>
+          <span>{t('sidebar.allAssets')}</span>
           <em>{navigation.totalAssets}</em>
         </button>
         <button type="button" className={favoriteOnly ? 'active' : ''} onClick={onShowFavorites}>
           <Heart size={17} />
-          <span>Favorites</span>
+          <span>{t('sidebar.favorites')}</span>
           <em>{navigation.favoriteCount}</em>
         </button>
       </nav>
 
       <section className="sidebar-group">
         <header>
-          <span>
-            <Boxes size={15} />
-            Packs
-          </span>
+          <span>{t('sidebar.packs')}</span>
         </header>
-        {navigation.packs.length === 0 ? <p>No packs yet</p> : null}
+        {navigation.packs.length === 0 ? <p>{t('sidebar.noPacks')}</p> : null}
         {navigation.packs.map((pack) => (
           <div className="sidebar-item-row" key={pack.id}>
             <button
@@ -117,8 +102,8 @@ export function AssetSidebar({
               type="button"
               className="sidebar-item-action"
               onClick={() => onRelinkPack(pack.id)}
-              title="Relink pack"
-              aria-label={`Relink ${pack.name}`}
+              title={t('sidebar.relinkPack')}
+              aria-label={t('sidebar.relinkNamed', { name: pack.name })}
             >
               <Link2 size={14} />
             </button>
@@ -128,15 +113,16 @@ export function AssetSidebar({
 
       <section className="sidebar-group">
         <header>
-          <span>
-            <FolderHeart size={15} />
-            Collections
-          </span>
-          <button type="button" onClick={onCreateCollection} aria-label="Create collection">
+          <span>{t('sidebar.collections')}</span>
+          <button
+            type="button"
+            onClick={onCreateCollection}
+            aria-label={t('sidebar.createCollection')}
+          >
             <Plus size={15} />
           </button>
         </header>
-        {navigation.collections.length === 0 ? <p>No collections</p> : null}
+        {navigation.collections.length === 0 ? <p>{t('sidebar.noCollections')}</p> : null}
         {navigation.collections.map((collection) => (
           <div
             className="sidebar-item-row collection-row"
@@ -157,16 +143,16 @@ export function AssetSidebar({
               <button
                 type="button"
                 onClick={() => onRenameCollection(collection.id, collection.name)}
-                title="Rename collection"
-                aria-label={`Rename ${collection.name}`}
+                title={t('sidebar.renameCollection')}
+                aria-label={t('sidebar.renameNamed', { name: collection.name })}
               >
                 <Pencil size={13} />
               </button>
               <button
                 type="button"
                 onClick={() => onDeleteCollection(collection.id, collection.name)}
-                title="Delete collection"
-                aria-label={`Delete ${collection.name}`}
+                title={t('sidebar.deleteCollection')}
+                aria-label={t('sidebar.deleteNamed', { name: collection.name })}
               >
                 <Trash2 size={13} />
               </button>
@@ -177,10 +163,7 @@ export function AssetSidebar({
 
       <section className="sidebar-group sidebar-tags">
         <header>
-          <span>
-            <Tags size={15} />
-            Tags
-          </span>
+          <span>{t('sidebar.tags')}</span>
         </header>
         <div>
           {navigation.tags.map((tag) => (
@@ -195,6 +178,28 @@ export function AssetSidebar({
           ))}
         </div>
       </section>
+
+      <div className="sidebar-language" aria-label={t('sidebar.language')}>
+        <span>{t('sidebar.language')}</span>
+        <div>
+          <button
+            type="button"
+            className={language === 'de' ? 'active' : ''}
+            onClick={() => setLanguage('de')}
+            aria-pressed={language === 'de'}
+          >
+            DE
+          </button>
+          <button
+            type="button"
+            className={language === 'en' ? 'active' : ''}
+            onClick={() => setLanguage('en')}
+            aria-pressed={language === 'en'}
+          >
+            EN
+          </button>
+        </div>
+      </div>
     </aside>
   )
 }

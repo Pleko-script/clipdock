@@ -3,9 +3,13 @@ import { FolderSearch, RefreshCw, X } from 'lucide-react'
 import type {
   AssetKind,
   AssetSummary,
+  AssetTrimRequest,
   AssetUpdateRequest,
+  ClipdockResult,
   OverlayMode
 } from '../../../shared/clipdock'
+import { useI18n } from '../i18n'
+import { AssetTrimEditor } from './AssetTrimEditor'
 
 function bytes(value: number): string {
   const units = ['B', 'KB', 'MB', 'GB']
@@ -22,181 +26,185 @@ export function AssetInspector({
   assets,
   onClose,
   onUpdate,
+  onSetTrim,
   onReveal,
   onRegenerate
 }: {
   assets: AssetSummary[]
   onClose: () => void
   onUpdate: (request: AssetUpdateRequest) => void
+  onSetTrim: (request: AssetTrimRequest) => Promise<ClipdockResult<void>>
   onReveal: (asset: AssetSummary) => void
   onRegenerate: (assets: AssetSummary[]) => void
 }): JSX.Element {
+  const { kind, t } = useI18n()
   const primary = assets[0]
   const [tags, setTags] = useState(primary?.tags.join(', ') ?? '')
-  const [note, setNote] = useState(primary?.note ?? '')
   const [tagsDirty, setTagsDirty] = useState(false)
-  const [noteDirty, setNoteDirty] = useState(false)
+
   if (!primary)
     return (
       <aside className="asset-inspector empty">
-        <button type="button" onClick={onClose} aria-label="Close inspector">
+        <button type="button" onClick={onClose} aria-label={t('inspector.close')}>
           <X size={17} />
         </button>
-        <strong>Inspector</strong>
-        <p>Select an asset to inspect and classify it.</p>
+        <strong>{t('inspector.nothingSelected')}</strong>
+        <p>{t('inspector.chooseClip')}</p>
       </aside>
     )
+
   const ids = assets.map((asset) => asset.id)
   return (
     <aside className="asset-inspector">
       <header>
         <div>
-          <span>{assets.length > 1 ? `${assets.length} assets` : primary.kind}</span>
-          <strong>{assets.length > 1 ? 'Batch edit' : primary.displayName}</strong>
+          <span>
+            {assets.length > 1
+              ? t('inspector.selected', { count: assets.length })
+              : `${kind(primary.kind)} · ${primary.extension.replace('.', '').toUpperCase()}`}
+          </span>
+          <strong>{assets.length > 1 ? t('inspector.batchEdit') : primary.displayName}</strong>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close inspector">
+        <button type="button" onClick={onClose} aria-label={t('inspector.close')}>
           <X size={17} />
         </button>
       </header>
-      {assets.length === 1 ? (
-        <div className="inspector-preview">
-          {primary.thumbnailUrl ? <img src={primary.thumbnailUrl} alt="" /> : null}
+
+      <div className="asset-editor-layout">
+        <section className="inspector-side-panel inspector-organize">
+          <h3>{t('inspector.organize')}</h3>
+          <label>
+            {t('inspector.assetType')}
+            <select
+              value={assets.every((asset) => asset.kind === primary.kind) ? primary.kind : ''}
+              onChange={(event) =>
+                event.target.value &&
+                onUpdate({ assetIds: ids, kind: event.target.value as AssetKind })
+              }
+            >
+              <option value="">{t('inspector.mixed')}</option>
+              <option value="transition">{kind('transition')}</option>
+              <option value="overlay">{kind('overlay')}</option>
+              <option value="sound">{kind('sound')}</option>
+              <option value="unknown">{kind('unknown')}</option>
+            </select>
+          </label>
+          {assets.every((asset) => asset.kind === 'overlay') ? (
+            <label>
+              {t('inspector.overlayMode')}
+              <select
+                value={
+                  assets.every((asset) => asset.overlayMode === primary.overlayMode)
+                    ? primary.overlayMode
+                    : ''
+                }
+                onChange={(event) =>
+                  event.target.value &&
+                  onUpdate({ assetIds: ids, overlayMode: event.target.value as OverlayMode })
+                }
+              >
+                <option value="">{t('inspector.mixed')}</option>
+                <option value="raw">{t('inspector.rawVideo')}</option>
+                <option value="alpha">{t('inspector.alpha')}</option>
+                <option value="screen">{t('inspector.screenAdd')}</option>
+              </select>
+            </label>
+          ) : null}
+          <label>
+            {t('inspector.tags')}
+            <input
+              value={tags}
+              onChange={(event) => {
+                setTags(event.target.value)
+                setTagsDirty(true)
+              }}
+              onBlur={() => {
+                if (!tagsDirty) return
+                setTagsDirty(false)
+                onUpdate({
+                  assetIds: ids,
+                  tags: tags
+                    .split(',')
+                    .map((tag) => tag.trim())
+                    .filter(Boolean)
+                })
+              }}
+              placeholder={t('inspector.tagsPlaceholder')}
+            />
+          </label>
+        </section>
+
+        <div className="asset-editor-primary">
+          {assets.length === 1 && (primary.mediaType !== 'video' || !primary.durationMs) ? (
+            <div className="inspector-preview">
+              {primary.thumbnailUrl ? <img src={primary.thumbnailUrl} alt="" /> : null}
+            </div>
+          ) : null}
+          {assets.length === 1 && primary.mediaType === 'video' && primary.durationMs ? (
+            <AssetTrimEditor
+              key={`${primary.id}:${primary.trimStartMs}:${primary.trimEndMs}:${primary.rotationDegrees}:${primary.trimStatus}`}
+              asset={primary}
+              onSetTrim={onSetTrim}
+            />
+          ) : null}
         </div>
-      ) : null}
-      <label>
-        Asset type
-        <select
-          value={assets.every((asset) => asset.kind === primary.kind) ? primary.kind : ''}
-          onChange={(event) =>
-            event.target.value && onUpdate({ assetIds: ids, kind: event.target.value as AssetKind })
-          }
-        >
-          <option value="">Mixed</option>
-          <option value="transition">Transition</option>
-          <option value="overlay">Overlay</option>
-          <option value="sound">Sound</option>
-          <option value="unknown">Unknown</option>
-        </select>
-      </label>
-      {assets.every((asset) => asset.kind === 'overlay') ? (
-        <label>
-          Overlay mode
-          <select
-            value={
-              assets.every((asset) => asset.overlayMode === primary.overlayMode)
-                ? primary.overlayMode
-                : ''
-            }
-            onChange={(event) =>
-              event.target.value &&
-              onUpdate({ assetIds: ids, overlayMode: event.target.value as OverlayMode })
-            }
-          >
-            <option value="">Mixed</option>
-            <option value="raw">Raw video</option>
-            <option value="alpha">Alpha</option>
-            <option value="screen">Screen / Add</option>
-          </select>
-        </label>
-      ) : null}
-      <label>
-        Tags
-        <input
-          value={tags}
-          onChange={(event) => {
-            setTags(event.target.value)
-            setTagsDirty(true)
-          }}
-          onBlur={() => {
-            if (!tagsDirty) return
-            setTagsDirty(false)
-            onUpdate({
-              assetIds: ids,
-              tags: tags
-                .split(',')
-                .map((tag) => tag.trim())
-                .filter(Boolean)
-            })
-          }}
-          placeholder="glitch, fast, warm"
-        />
-      </label>
-      {assets.length === 1 ? (
-        <label>
-          Notes
-          <textarea
-            value={note}
-            onChange={(event) => {
-              setNote(event.target.value)
-              setNoteDirty(true)
-            }}
-            onBlur={() => {
-              if (!noteDirty) return
-              setNoteDirty(false)
-              onUpdate({ assetIds: ids, note })
-            }}
-            placeholder="Usage notes"
-          />
-        </label>
-      ) : null}
-      {assets.length === 1 ? (
-        <dl className="asset-facts">
-          <div>
-            <dt>Pack</dt>
-            <dd>{primary.packName}</dd>
-          </div>
-          <div>
-            <dt>Format</dt>
-            <dd>{primary.extension.replace('.', '').toUpperCase()}</dd>
-          </div>
-          <div>
-            <dt>Codec</dt>
-            <dd>{primary.codec ?? primary.audioCodec ?? 'Unknown'}</dd>
-          </div>
-          <div>
-            <dt>Size</dt>
-            <dd>{bytes(primary.sizeBytes)}</dd>
-          </div>
-          {primary.widthPixels ? (
-            <div>
-              <dt>Resolution</dt>
-              <dd>
-                {primary.widthPixels} × {primary.heightPixels}
-              </dd>
-            </div>
+
+        <section className="inspector-side-panel inspector-file-panel">
+          <h3>{t('inspector.fileDetails')}</h3>
+          {assets.length === 1 ? (
+            <>
+              <dl className="asset-facts">
+                <div>
+                  <dt>{t('inspector.pack')}</dt>
+                  <dd>{primary.packName}</dd>
+                </div>
+                <div>
+                  <dt>{t('inspector.codec')}</dt>
+                  <dd>{primary.codec ?? primary.audioCodec ?? t('inspector.unknown')}</dd>
+                </div>
+                <div>
+                  <dt>{t('inspector.size')}</dt>
+                  <dd>{bytes(primary.sizeBytes)}</dd>
+                </div>
+                {primary.widthPixels ? (
+                  <div>
+                    <dt>{t('inspector.frame')}</dt>
+                    <dd>
+                      {primary.widthPixels} × {primary.heightPixels}
+                    </dd>
+                  </div>
+                ) : null}
+                {primary.sampleRate ? (
+                  <div>
+                    <dt>{t('inspector.audio')}</dt>
+                    <dd>
+                      {primary.sampleRate} Hz · {primary.channels ?? '?'} ch
+                    </dd>
+                  </div>
+                ) : null}
+                <div>
+                  <dt>{t('inspector.compatibility')}</dt>
+                  <dd className={`compatibility ${primary.compatibility}`}>
+                    {t(`compat.${primary.compatibility}`)}
+                  </dd>
+                </div>
+              </dl>
+              {primary.kind === 'overlay' && primary.overlayMode === 'screen' ? (
+                <p className="inspector-usage">{t('inspector.screenHint')}</p>
+              ) : null}
+              <div className="inspector-actions">
+                <button type="button" onClick={() => onReveal(primary)}>
+                  <FolderSearch size={15} />
+                  {t('inspector.reveal')}
+                </button>
+                <button type="button" onClick={() => onRegenerate(assets)}>
+                  <RefreshCw size={15} />
+                  {t('inspector.rebuild')}
+                </button>
+              </div>
+            </>
           ) : null}
-          {primary.sampleRate ? (
-            <div>
-              <dt>Audio</dt>
-              <dd>
-                {primary.sampleRate} Hz · {primary.channels ?? '?'} ch
-              </dd>
-            </div>
-          ) : null}
-          <div>
-            <dt>Compatibility</dt>
-            <dd className={`compatibility ${primary.compatibility}`}>{primary.compatibility}</dd>
-          </div>
-        </dl>
-      ) : null}
-      {primary.kind === 'transition' ? (
-        <p className="usage-note">Place this short clip between two timeline clips.</p>
-      ) : null}
-      {primary.kind === 'overlay' ? (
-        <p className="usage-note">
-          Place above footage
-          {primary.overlayMode === 'screen' ? ' and use Screen/Add blend mode.' : '.'}
-        </p>
-      ) : null}
-      <div className="inspector-actions">
-        <button type="button" onClick={() => onReveal(primary)}>
-          <FolderSearch size={16} />
-          Reveal
-        </button>
-        <button type="button" onClick={() => onRegenerate(assets)}>
-          <RefreshCw size={16} />
-          Rebuild preview
-        </button>
+        </section>
       </div>
     </aside>
   )

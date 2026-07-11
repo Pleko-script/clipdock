@@ -7,9 +7,11 @@ import { assetInvokeChannels, assetIpcChannels as channels } from '../shared/ipc
 import type { AssetJobEvent, AssetScanResult, ClipdockResult } from '../shared/clipdock'
 import icon from '../../resources/icon.png?asset'
 import { generateAssetPreview } from './assetPreview'
+import { generateTrimmedAsset } from './assetTrim'
 import {
   parseAssetDragRequest,
   parseAssetQuery,
+  parseAssetTrim,
   parseAssetUpdate,
   validAssetId,
   validAssetIds,
@@ -24,6 +26,7 @@ const AUDIO_EXTENSIONS = new Set<string>(SUPPORTED_AUDIO_EXTENSIONS)
 interface AssetRuntime {
   store: AssetStore
   previewCacheDir: string
+  trimCacheDir: string
 }
 
 export interface AssetIpcRegistration {
@@ -57,11 +60,13 @@ export function registerAssetIpc(): AssetIpcRegistration {
   if (!opened.ok) throw new Error(opened.error.message)
   const runtime: AssetRuntime = {
     store: opened.value,
-    previewCacheDir: join(root, 'asset-previews')
+    previewCacheDir: join(root, 'asset-previews'),
+    trimCacheDir: join(root, 'trimmed-assets')
   }
   let disposed = false
   let workerRunning = false
   let scanRunning = false
+  const trimsRunning = new Set<string>()
   const send = (sender: WebContents | null, event: AssetJobEvent): void => {
     if (sender && !sender.isDestroyed()) sender.send(channels.jobEvent, event)
   }
@@ -80,6 +85,18 @@ export function registerAssetIpc(): AssetIpcRegistration {
         // A valid new preview must not be failed by best-effort cache cleanup.
       }
     }
+  }
+
+  const removeTrimCacheFile = async (
+    filePath: string | null,
+    replacement: string | null = null
+  ): Promise<void> => {
+    if (!filePath) return
+    const oldPath = resolve(filePath)
+    const cacheRoot = `${resolve(runtime.trimCacheDir)}${sep}`
+    if (oldPath === (replacement ? resolve(replacement) : null) || !oldPath.startsWith(cacheRoot))
+      return
+    await rm(oldPath, { force: true }).catch(() => undefined)
   }
 
   const pumpPreviews = async (sender: WebContents | null): Promise<void> => {
@@ -217,6 +234,71 @@ export function registerAssetIpc(): AssetIpcRegistration {
   ipcMain.handle(channels.updateAssets, (_event, request: unknown) =>
     runtime.store.updateAssets(parseAssetUpdate(request))
   )
+  ipcMain.handle(channels.setTrim, async (_event, rawRequest: unknown) => {
+    const request = parseAssetTrim(rawRequest)
+    if (!request.assetId) return fail<void>('Asset was not found.', 'update')
+    if (trimsRunning.has(request.assetId))
+      return fail<void>('This video edit is already being prepared.', 'update')
+
+    if (request.startMs === null && request.endMs === null && request.rotationDegrees === 0) {
+      const cleared = runtime.store.clearTrim(request.assetId)
+      if (!cleared.ok) return cleared
+      await removeTrimCacheFile(cleared.value)
+      return ok(undefined)
+    }
+    if ((request.startMs === null || request.endMs === null) && request.startMs !== request.endMs)
+      return fail<void>('Both trim handles must define a valid range.', 'update')
+
+    trimsRunning.add(request.assetId)
+    const begun = runtime.store.beginTrim(
+      request.assetId,
+      request.startMs,
+      request.endMs,
+      request.rotationDegrees
+    )
+    if (!begun.ok) {
+      trimsRunning.delete(request.assetId)
+      return begun
+    }
+    try {
+      const renderStartMs = request.startMs ?? 0
+      const renderEndMs = request.endMs ?? begun.value.durationMs
+      const trimmedPath = await generateTrimmedAsset(
+        begun.value,
+        renderStartMs,
+        renderEndMs,
+        request.rotationDegrees,
+        runtime.trimCacheDir
+      )
+      const completed = runtime.store.completeTrim(
+        request.assetId,
+        request.startMs,
+        request.endMs,
+        request.rotationDegrees,
+        trimmedPath
+      )
+      if (!completed.ok) {
+        await removeTrimCacheFile(trimmedPath)
+        return completed
+      }
+      await removeTrimCacheFile(begun.value.previousTrimmedPath, trimmedPath)
+      return ok(undefined)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'The video edit could not be built.'
+      const reason = detail.trim().split(/\r?\n/).at(-1) || detail
+      const message = `ClipDock could not render this video edit. ${reason}`.slice(0, 1000)
+      runtime.store.failTrim(
+        request.assetId,
+        request.startMs,
+        request.endMs,
+        request.rotationDegrees,
+        message
+      )
+      return fail<void>(message, 'update')
+    } finally {
+      trimsRunning.delete(request.assetId)
+    }
+  })
   ipcMain.handle(channels.toggleFavorite, (_event, assetId: unknown) =>
     runtime.store.toggleFavorite(validAssetId(assetId))
   )
@@ -246,25 +328,46 @@ export function registerAssetIpc(): AssetIpcRegistration {
   ipcMain.on(channels.startDrag, (event: IpcMainEvent, request: unknown) => {
     const { assetIds } = parseAssetDragRequest(request)
     try {
+      const trimmedAssetIds: string[] = []
       const files = assetIds.map((id) => {
         const asset = runtime.store.getAssetPath(id)
         if (!asset.ok) throw new Error(asset.error.message)
         if (asset.value.status !== 'ready') throw new Error('Asset is not available for dragging.')
-        const filePath = normalize(asset.value.filePath)
+        let selectedPath = asset.value.filePath
+        const usingPreparedVideo =
+          asset.value.trimStartMs !== null || asset.value.rotationDegrees !== 0
+        if (usingPreparedVideo) {
+          if (asset.value.trimStatus !== 'ready' || !asset.value.trimmedPath)
+            throw new Error('Prepare the selected video edit before dragging it.')
+          const trimmedPath = resolve(asset.value.trimmedPath)
+          if (!trimmedPath.startsWith(`${resolve(runtime.trimCacheDir)}${sep}`))
+            throw new Error('The prepared video edit has an invalid cache path.')
+          selectedPath = trimmedPath
+          trimmedAssetIds.push(id)
+        }
+        const filePath = normalize(selectedPath)
         const extension = extname(filePath).toLocaleLowerCase('en-US')
         const supported =
           asset.value.mediaType === 'audio'
             ? AUDIO_EXTENSIONS.has(extension)
             : VIDEO_EXTENSIONS.has(extension)
         if (!supported) throw new Error('Asset format is not supported for dragging.')
-        if (!statSync(filePath).isFile()) throw new Error('Asset file is missing.')
+        try {
+          if (!statSync(filePath).isFile()) throw new Error()
+        } catch {
+          throw new Error(
+            usingPreparedVideo
+              ? 'The prepared video is missing. Rebuild it in the editor.'
+              : 'Asset file is missing.'
+          )
+        }
         return filePath
       })
       if (!files.length) throw new Error('Select at least one asset.')
       const dragItem: Parameters<WebContents['startDrag']>[0] = { file: files[0], icon }
       if (files.length > 1) dragItem.files = files
       event.sender.startDrag(dragItem)
-      event.sender.send(channels.dragEvent, { type: 'drag-started', assetIds })
+      event.sender.send(channels.dragEvent, { type: 'drag-started', assetIds, trimmedAssetIds })
     } catch (error) {
       event.sender.send(channels.dragEvent, {
         type: 'drag-failed',

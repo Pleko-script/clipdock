@@ -5,6 +5,7 @@ import {
   type AssetKind,
   type AssetQuery,
   type AssetSortMode,
+  type AssetTrimRequest,
   type AssetUpdateRequest,
   type OverlayMode
 } from '../shared/clipdock'
@@ -86,6 +87,23 @@ export function parseAssetUpdate(value: unknown): AssetUpdateRequest {
     overlayMode,
     tags: Array.isArray(input.tags) ? strings(input.tags, 32, 64) : undefined,
     note: typeof input.note === 'string' ? input.note.slice(0, 4000) : undefined
+  }
+}
+
+export function parseAssetTrim(value: unknown): AssetTrimRequest {
+  const input = record(value)
+  const numberOrNull = (candidate: unknown): number | null => {
+    const number = typeof candidate === 'number' ? candidate : Number.NaN
+    return Number.isFinite(number) ? Math.max(0, Math.round(number)) : null
+  }
+  return {
+    assetId: validAssetId(input.assetId),
+    startMs: numberOrNull(input.startMs),
+    endMs: numberOrNull(input.endMs),
+    rotationDegrees:
+      input.rotationDegrees === 90 || input.rotationDegrees === 180 || input.rotationDegrees === 270
+        ? input.rotationDegrees
+        : 0
   }
 }
 

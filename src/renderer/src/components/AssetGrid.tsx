@@ -9,8 +9,9 @@ import {
   type MouseEvent
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AlertTriangle, AudioLines, Film, Heart, Layers3 } from 'lucide-react'
+import { AlertTriangle, AudioLines, Film, Heart, Layers3, Scissors } from 'lucide-react'
 import type { AssetSummary } from '../../../shared/clipdock'
+import { useI18n } from '../i18n'
 
 const GAP = 14
 
@@ -18,20 +19,6 @@ function durationLabel(durationMs: number | null): string {
   if (!durationMs) return '--:--'
   const seconds = Math.round(durationMs / 1000)
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-}
-
-function formatLabel(asset: AssetSummary): string {
-  const format = asset.extension.replace('.', '').toUpperCase()
-  if (asset.mediaType === 'audio') {
-    const sampleRate = asset.sampleRate ? `${Math.round(asset.sampleRate / 1000)} kHz` : null
-    const channels = asset.channels === 1 ? 'Mono' : asset.channels === 2 ? 'Stereo' : null
-    return [format, sampleRate, channels].filter(Boolean).join(' · ')
-  }
-  const codec = asset.codec
-    ?.replace(/^h264$/i, 'H.264')
-    .replace(/^hevc$/i, 'HEVC')
-    .replace(/^prores$/i, 'ProRes')
-  return [format, codec, asset.hasAlpha ? 'Alpha' : null].filter(Boolean).join(' · ')
 }
 
 function KindIcon({ asset }: { asset: AssetSummary }): JSX.Element {
@@ -61,6 +48,7 @@ function AssetCard({
   onPreview: (active: boolean) => void
   onFavorite: () => void
 }): JSX.Element {
+  const { kind, t } = useI18n()
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const startHover = (): void => {
@@ -114,14 +102,15 @@ function AssetCard({
           <audio src={asset.mediaUrl} autoPlay onEnded={() => onPreview(false)} />
         ) : null}
         <div className="asset-card-topline">
-          <span className={`asset-kind kind-${asset.kind}`}>
-            <KindIcon asset={asset} />
-            {asset.kind}
-          </span>
+          {asset.kind !== 'unknown' ? (
+            <span className="asset-kind">{kind(asset.kind)}</span>
+          ) : (
+            <span />
+          )}
           <button
             type="button"
             className={`favorite-icon${asset.favorite ? ' active' : ''}`}
-            aria-label={asset.favorite ? 'Remove favorite' : 'Add favorite'}
+            aria-label={asset.favorite ? t('grid.removeFavorite') : t('grid.addFavorite')}
             onClick={(event) => {
               event.stopPropagation()
               onFavorite()
@@ -131,25 +120,32 @@ function AssetCard({
           </button>
         </div>
         <div className="asset-card-badges">
-          <span>{formatLabel(asset)}</span>
-          <span>{durationLabel(asset.durationMs)}</span>
+          <span
+            title={
+              asset.trimStartMs !== null ? t('grid.selectedDuration') : t('grid.originalDuration')
+            }
+          >
+            {asset.trimStartMs !== null && asset.trimEndMs !== null ? <Scissors size={10} /> : null}
+            {durationLabel(
+              asset.trimStartMs !== null && asset.trimEndMs !== null
+                ? asset.trimEndMs - asset.trimStartMs
+                : asset.durationMs
+            )}
+          </span>
         </div>
         {asset.status !== 'ready' ? (
           <div className="asset-error">
             <AlertTriangle size={18} />
-            Missing
+            {t('grid.missing')}
           </div>
         ) : null}
         {asset.previewStatus === 'pending' ? (
-          <span className="preview-pending">Building preview</span>
+          <span className="preview-pending">{t('grid.buildingPreview')}</span>
         ) : null}
       </div>
       <div className="asset-caption">
         <strong>{asset.displayName}</strong>
-        <span>
-          {asset.packName}
-          {asset.categoryPath ? ` / ${asset.categoryPath}` : ''}
-        </span>
+        <span>{asset.packName}</span>
       </div>
     </article>
   )
@@ -174,6 +170,7 @@ export function AssetGrid({
   onDrag: (asset: AssetSummary, event: DragEvent<HTMLElement>) => void
   onFavorite: (asset: AssetSummary) => void
 }): JSX.Element {
+  const { t } = useI18n()
   const parentRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(900)
   const [previewIds, setPreviewIds] = useState<string[]>([])
@@ -193,10 +190,12 @@ export function AssetGrid({
   useEffect(() => {
     const element = parentRef.current
     if (!element) return
-    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
+    const updateWidth = (): void => setWidth(element.getBoundingClientRect().width)
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
     observer.observe(element)
     return () => observer.disconnect()
-  }, [])
+  }, [assets.length])
 
   const virtualRows = virtualizer.getVirtualItems()
   const style = useMemo(() => ({ '--asset-columns': columns }) as CSSProperties, [columns])
@@ -205,8 +204,8 @@ export function AssetGrid({
     return (
       <div className="asset-empty">
         <Film size={42} />
-        <strong>No assets found</strong>
-        <span>Add a pack or change the active filters.</span>
+        <strong>{t('grid.emptyTitle')}</strong>
+        <span>{t('grid.emptyBody')}</span>
       </div>
     )
   }
