@@ -87,6 +87,7 @@ export interface AssetStore {
   queryAssets: (query: AssetQuery) => ClipdockResult<AssetPage>
   navigation: () => ClipdockResult<AssetNavigationSnapshot>
   updateAssets: (request: AssetUpdateRequest) => ClipdockResult<void>
+  recordAssetUsage: (assetIds: string[]) => ClipdockResult<void>
   beginTrim: (
     assetId: string,
     startMs: number | null,
@@ -156,6 +157,8 @@ interface AssetRow {
   channels: number | null
   has_alpha: number
   favorite: number
+  last_used_at_ms: number | null
+  use_count: number
   note: string
   status: AssetStatus
   preview_status: PreviewStatus
@@ -463,6 +466,7 @@ class SqliteAssetStore implements AssetStore {
         query.formats?.map((value) => value.toLowerCase())
       )
       if (query.favoriteOnly) where.push('a.favorite = 1')
+      if (query.usedOnly) where.push('a.last_used_at_ms IS NOT NULL')
       if (query.collectionIds?.length) {
         where.push(
           `EXISTS (SELECT 1 FROM collection_assets ca WHERE ca.asset_id=a.id AND ca.collection_id IN (${query.collectionIds.map(() => '?').join(',')}))`
@@ -497,9 +501,11 @@ class SqliteAssetStore implements AssetStore {
           ? 'a.modified_at_ms DESC, a.id'
           : sort === 'duration'
             ? 'COALESCE(a.duration_ms,0) DESC, a.id'
-            : sort === 'recent'
-              ? 'a.created_at_ms DESC, a.id'
-              : 'a.display_name COLLATE NOCASE, a.id'
+            : sort === 'last-used'
+              ? 'a.last_used_at_ms IS NULL, a.last_used_at_ms DESC, a.id'
+              : sort === 'most-used'
+                ? 'a.use_count DESC, a.last_used_at_ms IS NULL, a.last_used_at_ms DESC, a.id'
+                : 'a.display_name COLLATE NOCASE, a.id'
       const limit = Math.min(200, Math.max(1, query.limit ?? DEFAULT_PAGE_SIZE))
       const offset = Math.max(0, Number(query.cursor ?? 0) || 0)
       const totalRow = this.database
@@ -539,9 +545,14 @@ class SqliteAssetStore implements AssetStore {
         .all() as Array<{ name: string }>
       const counts = this.database
         .prepare(
-          `SELECT COUNT(*) total, SUM(favorite) favorites, SUM(CASE WHEN preview_status='pending' THEN 1 ELSE 0 END) pending FROM assets`
+          `SELECT COUNT(*) total, SUM(favorite) favorites, SUM(CASE WHEN last_used_at_ms IS NOT NULL THEN 1 ELSE 0 END) used, SUM(CASE WHEN preview_status='pending' THEN 1 ELSE 0 END) pending FROM assets`
         )
-        .get() as { total: number; favorites: number | null; pending: number | null }
+        .get() as {
+        total: number
+        favorites: number | null
+        used: number | null
+        pending: number | null
+      }
       return ok({
         packs: packs.value,
         collections: collections.map((row) => ({
@@ -554,6 +565,7 @@ class SqliteAssetStore implements AssetStore {
         tags: tags.map((row) => row.name),
         totalAssets: Number(counts.total),
         favoriteCount: Number(counts.favorites ?? 0),
+        usedAssetCount: Number(counts.used ?? 0),
         pendingPreviewCount: Number(counts.pending ?? 0)
       })
     } catch {
@@ -623,6 +635,31 @@ class SqliteAssetStore implements AssetStore {
       return ok(undefined)
     } catch (error) {
       return fail(error instanceof Error ? error.message : 'Assets could not be updated.', 'update')
+    }
+  }
+
+  recordAssetUsage(assetIds: string[]): ClipdockResult<void> {
+    const ids = [...new Set(assetIds.filter(Boolean))].slice(0, 32)
+    if (!ids.length) return fail('Select at least one asset.', 'update')
+    try {
+      this.transaction(() => {
+        const placeholders = ids.map(() => '?').join(',')
+        const existing = this.database
+          .prepare(`SELECT COUNT(*) count FROM assets WHERE id IN (${placeholders})`)
+          .get(...ids) as { count: number }
+        if (existing.count !== ids.length) throw new Error('One or more assets were not found.')
+        this.database
+          .prepare(
+            `UPDATE assets SET last_used_at_ms=?, use_count=use_count+1 WHERE id IN (${placeholders})`
+          )
+          .run(this.now(), ...ids)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : 'Asset usage could not be saved.',
+        'update'
+      )
     }
   }
 
@@ -994,6 +1031,8 @@ class SqliteAssetStore implements AssetStore {
       channels: row.channels,
       hasAlpha: row.has_alpha === 1,
       favorite: row.favorite === 1,
+      lastUsedAtMs: row.last_used_at_ms === null ? null : Number(row.last_used_at_ms),
+      useCount: Number(row.use_count),
       note: row.note,
       tags,
       collectionIds,

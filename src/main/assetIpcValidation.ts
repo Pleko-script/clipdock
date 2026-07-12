@@ -12,7 +12,13 @@ import {
 
 const KINDS = new Set<AssetKind>(['transition', 'overlay', 'sound', 'unknown'])
 const OVERLAY_MODES = new Set<OverlayMode>(['alpha', 'screen', 'raw'])
-const SORT_MODES = new Set<AssetSortMode>(['name', 'modified', 'duration', 'recent'])
+const SORT_MODES = new Set<AssetSortMode>([
+  'name',
+  'modified',
+  'duration',
+  'last-used',
+  'most-used'
+])
 const FORMATS = new Set<string>([...SUPPORTED_VIDEO_EXTENSIONS, ...SUPPORTED_AUDIO_EXTENSIONS])
 
 function record(value: unknown): Record<string, unknown> {
@@ -66,6 +72,7 @@ export function parseAssetQuery(value: unknown): AssetQuery {
     collectionIds: validAssetIds(input.collectionIds, 64),
     tags: strings(input.tags, 32, 64),
     favoriteOnly: input.favoriteOnly === true,
+    usedOnly: input.usedOnly === true,
     formats: formats.length ? formats : undefined,
     sort
   }

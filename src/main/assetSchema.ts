@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AssetStatus } from '../shared/clipdock'
 import { createAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 
-export const ASSET_SCHEMA_VERSION = 6
+export const ASSET_SCHEMA_VERSION = 7
 
 interface LegacySourceRow {
   id: string
@@ -82,6 +82,8 @@ function createTables(database: DatabaseSync): void {
       has_alpha INTEGER NOT NULL DEFAULT 0 CHECK (has_alpha IN (0,1)),
       metadata_json TEXT,
       favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0,1)),
+      last_used_at_ms INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0),
       note TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','missing','error')),
       preview_status TEXT NOT NULL DEFAULT 'pending' CHECK (preview_status IN ('pending','ready','failed')),
@@ -170,6 +172,23 @@ function ensureTrimColumns(database: DatabaseSync): void {
   for (const [name, definition] of additions) {
     if (!columns.has(name)) database.exec(`ALTER TABLE assets ADD COLUMN ${name} ${definition}`)
   }
+}
+
+function ensureUsageColumns(database: DatabaseSync): void {
+  const columns = new Set(
+    (database.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>).map(
+      (column) => column.name
+    )
+  )
+  if (!columns.has('last_used_at_ms'))
+    database.exec('ALTER TABLE assets ADD COLUMN last_used_at_ms INTEGER')
+  if (!columns.has('use_count'))
+    database.exec(
+      'ALTER TABLE assets ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0)'
+    )
+  database.exec(
+    'CREATE INDEX IF NOT EXISTS idx_assets_last_used ON assets(last_used_at_ms DESC); CREATE INDEX IF NOT EXISTS idx_assets_use_count ON assets(use_count DESC, last_used_at_ms DESC);'
+  )
 }
 
 function legacyRootPath(source: LegacySourceRow): string {
@@ -300,6 +319,7 @@ export function migrateAssetSchema(database: DatabaseSync, timestamp: number): v
   try {
     createTables(database)
     ensureTrimColumns(database)
+    ensureUsageColumns(database)
     database.exec(
       'UPDATE assets SET rotation_degrees=0 WHERE rotation_degrees IS NULL OR rotation_degrees NOT IN (0,90,180,270)'
     )

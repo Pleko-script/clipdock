@@ -38,6 +38,7 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 | **Browse**   | Virtualized asset grid    | Keeps large libraries responsive while showing full-bleed thumbnails.                                       |
 | **Preview**  | Contextual playback       | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.               |
 | **Find**     | Search and filters        | Searches filenames, packs, folders, and tags; filters by asset type, format, pack, Collection, or favorite. |
+| **Reuse**    | Recently and most used    | Records successful local drags so proven assets are easy to find again.                                    |
 | **Organize** | Packs and Collections     | Treats each imported folder as a pack and its subfolders as categories. Collections never move files.       |
 | **Classify** | Automatic asset detection | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.            |
 | **Inspect**  | Media metadata            | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.      |

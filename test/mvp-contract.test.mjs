@@ -168,6 +168,10 @@ test('Electron boundary is hardened and preserves media range headers', () => {
   assert.match(ipc, /status !== 'ready'/)
   assert.match(
     ipc,
+    /event\.sender\.startDrag\(dragItem\)[\s\S]*recordAssetUsage\(assetIds\)[\s\S]*type: 'drag-started'/
+  )
+  assert.match(
+    ipc,
     /return withScanLock\(async \(\) => \{\s*const relinked = runtime\.store\.relinkPack/s
   )
 })
@@ -189,6 +193,10 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
   assert.equal(query.packIds.length, 64)
   assert.equal(query.cursor, undefined)
   assert.equal(query.sort, 'name')
+
+  const usageQuery = runtime.validation.parseAssetQuery({ usedOnly: true, sort: 'most-used' })
+  assert.equal(usageQuery.usedOnly, true)
+  assert.equal(usageQuery.sort, 'most-used')
 
   const update = runtime.validation.parseAssetUpdate({
     assetIds: ['a', 'a', '', 42],
@@ -253,17 +261,20 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
   const workspace = mkdtempSync(join(tmpdir(), 'clipdock-store-audit-'))
   const packRoot = join(workspace, 'Legacy Pack')
   const mediaPath = join(packRoot, 'wipe.mp4')
+  const secondMediaPath = join(packRoot, 'impact.mp4')
   const databaseFile = join(workspace, 'library.sqlite')
+  let clock = 200
   let store
   try {
     mkdirSync(packRoot, { recursive: true })
     writeFileSync(mediaPath, 'video')
+    writeFileSync(secondMediaPath, 'video 2')
     createLegacyDatabase(databaseFile, packRoot, mediaPath)
     const opened = runtime.store.openAssetStore({
       databaseFile,
       previewCacheDir: join(workspace, 'previews'),
       createId: createIdGenerator('asset'),
-      now: () => 200
+      now: () => clock
     })
     assert.equal(opened.ok, true, opened.error?.message)
     store = opened.value
@@ -278,6 +289,61 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(migrated.value.items[0].trimStatus, 'none')
     assert.equal(migrated.value.items[0].trimStartMs, null)
     assert.equal(migrated.value.items[0].rotationDegrees, 0)
+    assert.equal(migrated.value.items[0].lastUsedAtMs, null)
+    assert.equal(migrated.value.items[0].useCount, 0)
+
+    const secondAsset = store.upsertScannedAsset({
+      packId: 'source-1',
+      filePath: secondMediaPath,
+      kind: 'transition',
+      mediaType: 'video',
+      overlayMode: 'raw',
+      compatibility: 'expected',
+      sizeBytes: 7,
+      modifiedAtMs: 100,
+      durationMs: 500,
+      widthPixels: 1920,
+      heightPixels: 1080,
+      fps: 30,
+      codec: 'h264',
+      audioCodec: null,
+      sampleRate: null,
+      channels: null,
+      hasAlpha: false,
+      metadataJson: null
+    })
+    assert.equal(secondAsset.ok, true, secondAsset.error?.message)
+
+    clock = 300
+    assert.equal(store.recordAssetUsage(['clip-1']).ok, true)
+    clock = 400
+    assert.equal(
+      store.recordAssetUsage(['clip-1', secondAsset.value.id, secondAsset.value.id]).ok,
+      true
+    )
+    clock = 500
+    assert.equal(store.recordAssetUsage([secondAsset.value.id]).ok, true)
+    clock = 600
+    assert.equal(store.recordAssetUsage([secondAsset.value.id]).ok, true)
+    const beforeRejectedUsage = store.getAsset('clip-1').value
+    assert.equal(store.recordAssetUsage(['clip-1', 'missing']).ok, false)
+    assert.equal(store.getAsset('clip-1').value.useCount, beforeRejectedUsage.useCount)
+
+    const lastUsed = store.queryAssets({ usedOnly: true, sort: 'last-used' }).value
+    assert.equal(lastUsed.totalCount, 2)
+    assert.deepEqual(
+      lastUsed.items.map((asset) => asset.id),
+      [secondAsset.value.id, 'clip-1']
+    )
+    assert.equal(lastUsed.items[0].lastUsedAtMs, 600)
+    assert.equal(lastUsed.items[0].useCount, 3)
+    assert.equal(lastUsed.items[1].lastUsedAtMs, 400)
+    assert.equal(lastUsed.items[1].useCount, 2)
+    assert.deepEqual(
+      store.queryAssets({ sort: 'most-used' }).value.items.map((asset) => asset.id),
+      [secondAsset.value.id, 'clip-1']
+    )
+    assert.equal(store.navigation().value.usedAssetCount, 2)
 
     const rejectedUpdate = store.updateAssets({
       assetIds: ['clip-1', 'missing'],
@@ -499,6 +565,10 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(i18n, /clipdock\.language/)
   assert.match(i18n, /'sidebar\.language': 'Sprache'/)
   assert.match(i18n, /'sidebar\.language': 'Language'/)
+  assert.match(app, /type: 'recent'/)
+  assert.match(app, /value="last-used"/)
+  assert.match(app, /value="most-used"/)
+  assert.match(renderer, /sidebar\.recentlyUsed/)
   assert.doesNotMatch(app, /title="Filters"/)
 })
 

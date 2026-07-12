@@ -1,5 +1,15 @@
 import type { DragEvent, JSX } from 'react'
-import { FolderHeart, FolderOpen, Heart, Library, Link2, Pencil, Plus, Trash2 } from 'lucide-react'
+import {
+  FolderHeart,
+  FolderOpen,
+  Heart,
+  History,
+  Library,
+  Link2,
+  Pencil,
+  Plus,
+  Trash2
+} from 'lucide-react'
 import type { AssetNavigationSnapshot } from '../../../shared/clipdock'
 import { useI18n } from '../i18n'
 
@@ -18,9 +28,11 @@ export function AssetSidebar({
   activeCollectionId,
   selectedTag,
   favoriteOnly,
+  recentlyUsed,
   busy,
   onShowAll,
   onShowFavorites,
+  onShowRecentlyUsed,
   onSelectPack,
   onSelectCollection,
   onSelectTag,
@@ -36,9 +48,11 @@ export function AssetSidebar({
   activeCollectionId: string | null
   selectedTag: string | null
   favoriteOnly: boolean
+  recentlyUsed: boolean
   busy: boolean
   onShowAll: () => void
   onShowFavorites: () => void
+  onShowRecentlyUsed: () => void
   onSelectPack: (id: string) => void
   onSelectCollection: (id: string) => void
   onSelectTag: (tag: string) => void
@@ -66,7 +80,9 @@ export function AssetSidebar({
         <button
           type="button"
           className={
-            !activePackId && !activeCollectionId && !selectedTag && !favoriteOnly ? 'active' : ''
+            !activePackId && !activeCollectionId && !selectedTag && !favoriteOnly && !recentlyUsed
+              ? 'active'
+              : ''
           }
           onClick={onShowAll}
         >
@@ -78,6 +94,11 @@ export function AssetSidebar({
           <Heart size={17} />
           <span>{t('sidebar.favorites')}</span>
           <em>{navigation.favoriteCount}</em>
+        </button>
+        <button type="button" className={recentlyUsed ? 'active' : ''} onClick={onShowRecentlyUsed}>
+          <History size={17} />
+          <span>{t('sidebar.recentlyUsed')}</span>
+          <em>{navigation.usedAssetCount}</em>
         </button>
       </nav>
 

@@ -33,12 +33,14 @@ const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
   tags: [],
   totalAssets: 0,
   favoriteCount: 0,
+  usedAssetCount: 0,
   pendingPreviewCount: 0
 }
 
 type LibraryScope =
   | { type: 'all' }
   | { type: 'favorites' }
+  | { type: 'recent' }
   | { type: 'pack'; id: string }
   | { type: 'collection'; id: string }
   | { type: 'tag'; name: string }
@@ -48,6 +50,7 @@ function scopeFilters(scope: LibraryScope): Partial<AssetQuery> {
   if (scope.type === 'collection') return { collectionIds: [scope.id] }
   if (scope.type === 'tag') return { tags: [scope.name] }
   if (scope.type === 'favorites') return { favoriteOnly: true }
+  if (scope.type === 'recent') return { usedOnly: true }
   return {}
 }
 
@@ -64,7 +67,8 @@ function scopeName(
       t('app.collection')
     )
   if (scope.type === 'tag') return `#${scope.name}`
-  return scope.type === 'favorites' ? t('app.favorites') : t('app.entireLibrary')
+  if (scope.type === 'favorites') return t('app.favorites')
+  return scope.type === 'recent' ? t('app.recentlyUsed') : t('app.entireLibrary')
 }
 
 function App(): JSX.Element {
@@ -206,6 +210,7 @@ function App(): JSX.Element {
             })
           : localizeError(event.error?.message ?? t('app.dragFailed'))
       )
+      if (event.type === 'drag-started') scheduleRefresh()
     })
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
@@ -369,9 +374,14 @@ function App(): JSX.Element {
         activeCollectionId={scope.type === 'collection' ? scope.id : null}
         selectedTag={scope.type === 'tag' ? scope.name : null}
         favoriteOnly={scope.type === 'favorites'}
+        recentlyUsed={scope.type === 'recent'}
         busy={busy}
         onShowAll={() => setScope({ type: 'all' })}
         onShowFavorites={() => setScope({ type: 'favorites' })}
+        onShowRecentlyUsed={() => {
+          setScope({ type: 'recent' })
+          setSort('last-used')
+        }}
         onSelectPack={(id) => setScope({ type: 'pack', id })}
         onSelectCollection={(id) => setScope({ type: 'collection', id })}
         onSelectTag={(name) => setScope({ type: 'tag', name })}
@@ -432,7 +442,8 @@ function App(): JSX.Element {
               aria-label={t('toolbar.sort')}
             >
               <option value="name">{t('toolbar.name')}</option>
-              <option value="recent">{t('toolbar.recent')}</option>
+              <option value="last-used">{t('toolbar.lastUsed')}</option>
+              <option value="most-used">{t('toolbar.mostUsed')}</option>
               <option value="modified">{t('toolbar.modified')}</option>
               <option value="duration">{t('toolbar.duration')}</option>
             </select>

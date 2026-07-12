@@ -36,7 +36,7 @@ export type AssetKind = 'transition' | 'overlay' | 'sound' | 'unknown'
 export type AssetMediaType = 'video' | 'audio'
 export type OverlayMode = 'alpha' | 'screen' | 'raw'
 export type CompatibilityLevel = 'verified' | 'expected' | 'unsupported'
-export type AssetSortMode = 'name' | 'modified' | 'duration' | 'recent'
+export type AssetSortMode = 'name' | 'modified' | 'duration' | 'last-used' | 'most-used'
 export type AssetStatus = 'ready' | 'missing' | 'error'
 export type PreviewStatus = 'pending' | 'ready' | 'failed'
 export type TrimStatus = 'none' | 'pending' | 'ready' | 'failed'
@@ -86,6 +86,8 @@ export interface AssetSummary {
   channels: number | null
   hasAlpha: boolean
   favorite: boolean
+  lastUsedAtMs: number | null
+  useCount: number
   note: string
   tags: string[]
   collectionIds: string[]
@@ -111,6 +113,7 @@ export interface AssetQuery {
   collectionIds?: string[]
   tags?: string[]
   favoriteOnly?: boolean
+  usedOnly?: boolean
   formats?: string[]
   sort?: AssetSortMode
 }
@@ -127,6 +130,7 @@ export interface AssetNavigationSnapshot {
   tags: string[]
   totalAssets: number
   favoriteCount: number
+  usedAssetCount: number
   pendingPreviewCount: number
 }
 

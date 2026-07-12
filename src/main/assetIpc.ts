@@ -367,6 +367,9 @@ export function registerAssetIpc(): AssetIpcRegistration {
       const dragItem: Parameters<WebContents['startDrag']>[0] = { file: files[0], icon }
       if (files.length > 1) dragItem.files = files
       event.sender.startDrag(dragItem)
+      const usage = runtime.store.recordAssetUsage(assetIds)
+      if (!usage.ok)
+        console.error('[clipdock] asset usage could not be saved:', usage.error.message)
       event.sender.send(channels.dragEvent, { type: 'drag-started', assetIds, trimmedAssetIds })
     } catch (error) {
       event.sender.send(channels.dragEvent, {
