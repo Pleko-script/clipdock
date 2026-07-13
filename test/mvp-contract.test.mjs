@@ -69,6 +69,7 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetScanner.ts'),
         join(projectRoot, 'src/main/assetSchema.ts'),
         join(projectRoot, 'src/main/assetSearch.ts'),
+        join(projectRoot, 'src/main/smartCollectionStore.ts'),
         join(projectRoot, 'src/main/assetStore.ts'),
         join(projectRoot, 'src/main/mediaProbe.ts'),
         join(projectRoot, 'src/main/mediaProcess.ts'),
@@ -232,6 +233,29 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
   assert.deepEqual(restored, combined)
   assert.deepEqual(runtime.filters.emptyAssetFilters(), emptyFilters)
 
+  const smartCriteria = runtime.validation.parseSmartCollectionCriteria({
+    search: ' wipe ',
+    filters: {
+      kinds: ['transition', 'hacked'],
+      formats: ['MOV', '.exe'],
+      codecs: ['ProRes', 42]
+    },
+    scope: { type: 'pack', id: ' pack-1 ' },
+    sort: 'modified'
+  })
+  assert.equal(smartCriteria.search, 'wipe')
+  assert.deepEqual(smartCriteria.filters.kinds, ['transition'])
+  assert.deepEqual(smartCriteria.filters.formats, ['.mov'])
+  assert.deepEqual(smartCriteria.filters.codecs, ['prores'])
+  assert.deepEqual(smartCriteria.scope, { type: 'pack', id: 'pack-1' })
+  assert.equal(smartCriteria.sort, 'modified')
+  assert.deepEqual(
+    runtime.validation.parseSmartCollectionCriteria({ scope: { type: 'gone' } }).scope,
+    {
+      type: 'all'
+    }
+  )
+
   const update = runtime.validation.parseAssetUpdate({
     assetIds: ['a', 'a', '', 42],
     kind: 'malware',
@@ -325,6 +349,7 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(migrated.value.items[0].rotationDegrees, 0)
     assert.equal(migrated.value.items[0].lastUsedAtMs, null)
     assert.equal(migrated.value.items[0].useCount, 0)
+    assert.deepEqual(store.navigation().value.smartCollections, [])
 
     const secondAsset = store.upsertScannedAsset({
       packId: 'source-1',
@@ -372,6 +397,62 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
       [['', 2]]
     )
     assert.deepEqual(store.queryAssets({ aspects: ['portrait'] }).value.items, [])
+
+    const transitionCriteria = {
+      search: '',
+      filters: {
+        ...runtime.filters.emptyAssetFilters(),
+        kinds: ['transition']
+      },
+      scope: { type: 'all' },
+      sort: 'name'
+    }
+    assert.equal(
+      store.saveSmartCollection({ name: 'Motion Picks', criteria: transitionCriteria }).ok,
+      true
+    )
+    let savedSmartCollection = store.navigation().value.smartCollections[0]
+    assert.equal(savedSmartCollection.name, 'Motion Picks')
+    assert.equal(savedSmartCollection.criteriaValid, true)
+    const querySavedSmartCollection = () =>
+      store.queryAssets(
+        runtime.filters.smartCollectionCriteriaToQuery(
+          store.navigation().value.smartCollections[0].criteria
+        )
+      ).value
+    assert.deepEqual(
+      querySavedSmartCollection().items.map((asset) => asset.id),
+      [secondAsset.value.id]
+    )
+    assert.equal(store.updateAssets({ assetIds: [secondAsset.value.id], kind: 'overlay' }).ok, true)
+    assert.equal(querySavedSmartCollection().totalCount, 0)
+    assert.equal(
+      store.updateAssets({ assetIds: [secondAsset.value.id], kind: 'transition' }).ok,
+      true
+    )
+    assert.equal(querySavedSmartCollection().totalCount, 1)
+
+    assert.equal(
+      store.saveSmartCollection({
+        id: savedSmartCollection.id,
+        name: 'Favorite Motion',
+        criteria: {
+          ...transitionCriteria,
+          filters: runtime.filters.emptyAssetFilters(),
+          scope: { type: 'favorites' }
+        }
+      }).ok,
+      true
+    )
+    savedSmartCollection = store.navigation().value.smartCollections[0]
+    assert.equal(savedSmartCollection.name, 'Favorite Motion')
+    assert.deepEqual(
+      querySavedSmartCollection().items.map((asset) => asset.id),
+      ['clip-1']
+    )
+    assert.equal(store.toggleFavorite('clip-1').ok, true)
+    assert.equal(querySavedSmartCollection().totalCount, 0)
+    assert.equal(store.toggleFavorite('clip-1').ok, true)
 
     clock = 300
     assert.equal(store.recordAssetUsage(['clip-1']).ok, true)
@@ -435,6 +516,37 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(store.getAsset('clip-1').value.rotationDegrees, 90)
     assert.equal(store.getAsset('clip-1').value.trimStatus, 'pending')
     assert.equal(store.clearTrim('clip-1').ok, true)
+
+    const smartCollectionId = savedSmartCollection.id
+    store.close()
+    store = null
+    const database = new DatabaseSync(databaseFile)
+    database
+      .prepare('UPDATE smart_collections SET criteria_json=? WHERE id=?')
+      .run('{invalid-json', smartCollectionId)
+    database.close()
+    store = runtime.store.openAssetStore({
+      databaseFile,
+      previewCacheDir: join(workspace, 'previews'),
+      createId: createIdGenerator('reopened'),
+      now: () => clock
+    }).value
+    const invalidSmartCollection = store.navigation().value.smartCollections[0]
+    assert.equal(invalidSmartCollection.criteriaValid, false)
+    assert.equal(invalidSmartCollection.criteria.scope.type, 'all')
+    assert.equal(
+      store.saveSmartCollection({
+        id: smartCollectionId,
+        name: invalidSmartCollection.name,
+        criteria: transitionCriteria
+      }).ok,
+      true
+    )
+    assert.equal(store.navigation().value.smartCollections[0].criteriaValid, true)
+    assert.equal(store.deleteSmartCollection(smartCollectionId).ok, true)
+    assert.deepEqual(store.navigation().value.smartCollections, [])
+    assert.equal(existsSync(mediaPath), true)
+    assert.equal(existsSync(secondMediaPath), true)
   } finally {
     try {
       store?.close()
@@ -722,7 +834,7 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   )
   assert.doesNotMatch(renderer, /from ['"`]electron['"`]|from ['"`]node:|ipcRenderer/)
   assert.match(grid, /useVirtualizer/)
-  assert.match(app, /type LibraryScope/)
+  assert.match(app, /AssetLibraryScope/)
   assert.match(app, /scheduleRefresh/)
   assert.match(trimEditor, /role="slider"/)
   assert.match(trimEditor, /trim-range-thumb in/)
@@ -744,6 +856,10 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(app, /value="last-used"/)
   assert.match(app, /value="most-used"/)
   assert.match(renderer, /sidebar\.recentlyUsed/)
+  assert.match(renderer, /sidebar\.smartCollections/)
+  assert.match(app, /saveSmartCollection/)
+  assert.match(app, /deleteSmartCollection/)
+  assert.match(app, /selectSmartCollection/)
   assert.match(filterUi, /asset-filter-popover/)
   assert.match(filterUi, /asset-filter-chips/)
   assert.match(filterUi, /filter\.clearAll/)

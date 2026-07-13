@@ -28,26 +28,26 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 
 - **See the effect before using it.** Transitions and overlays are rendered against local demo scenes; sounds get cached waveforms.
 - **Stay inside your existing workflow.** Drag one or multiple real media files into DaVinci Resolve, Adobe Premiere Pro, or another editor.
-- **Organize without touching disk.** Packs, Collections, tags, and favorites live in ClipDock while source files stay where they are.
+- **Organize without touching disk.** Packs, Collections, Smart Collections, tags, and favorites live in ClipDock while source files stay where they are.
 - **Work without an account.** Everything—including metadata, search, and generated previews—runs locally.
 
 ## Features
 
-|              | Feature                   | What it does                                                                                           |
-| ------------ | ------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Browse**   | Virtualized asset grid    | Keeps large libraries responsive while showing full-bleed thumbnails.                                  |
-| **Preview**  | Contextual playback       | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.          |
-| **Find**     | Search and live filters   | Combines faceted media filters with live result counts while keeping every result page capped at 200.  |
-| **Reuse**    | Recently and most used    | Records successful local drags so proven assets are easy to find again.                                |
-| **Organize** | Packs and Collections     | Treats each imported folder as a pack and its subfolders as categories. Collections never move files.  |
-| **Classify** | Automatic asset detection | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.       |
-| **Inspect**  | Media metadata            | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe. |
-| **Trim**     | Non-destructive In / Out  | Prepares a frame-accurate video range for drag-and-drop without changing the source file.              |
-| **Rotate**   | Quarter-turn video edits  | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.             |
-| **Listen**   | Preview volume            | Plays available clip audio with a persistent volume slider and mute control.                           |
-| **Language** | Deutsch / English         | Switches the complete interface instantly and remembers the local preference.                          |
-| **Deliver**  | Native multi-file drag    | Resolves and validates real local paths in Electron's main process before starting the OS drag.        |
-| **Recover**  | Missing-media relink      | Points a moved pack at a new root while preserving favorites, tags, and Collections.                   |
+|              | Feature                     | What it does                                                                                                |
+| ------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Browse**   | Virtualized asset grid      | Keeps large libraries responsive while showing full-bleed thumbnails.                                       |
+| **Preview**  | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.               |
+| **Find**     | Search and live filters     | Combines faceted media filters with live result counts while keeping every result page capped at 200.       |
+| **Reuse**    | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                     |
+| **Organize** | Collections and saved views | Groups assets manually or saves the current search, scope, filters, and sort as a dynamic Smart Collection. |
+| **Classify** | Automatic asset detection   | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.            |
+| **Inspect**  | Media metadata              | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.      |
+| **Trim**     | Non-destructive In / Out    | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                   |
+| **Rotate**   | Quarter-turn video edits    | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                  |
+| **Listen**   | Preview volume              | Plays available clip audio with a persistent volume slider and mute control.                                |
+| **Language** | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                               |
+| **Deliver**  | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.             |
+| **Recover**  | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                        |
 
 ## Workflow
 
@@ -57,7 +57,7 @@ Choose **Add Pack** and select a folder containing effects. The selected folder 
 
 ### 2. Find and preview
 
-ClipDock scans supported media, stores metadata first, and generates previews in the background. Search, filter, favorite, or group assets into Collections. Hover a card for a quick preview or press `Space` for Quick Look.
+ClipDock scans supported media, stores metadata first, and generates previews in the background. Search, filter, favorite, or group assets into Collections. Save a useful result view as a Smart Collection to re-run the same criteria against the current library. Hover a card for a quick preview or press `Space` for Quick Look.
 
 ### 3. Drag into the edit
 
@@ -149,7 +149,7 @@ React renderer
           └─ validated native file drag
 ```
 
-The interface uses React and TanStack Virtual. Electron owns all privileged operations. SQLite stores packs, assets, Collections, tags, and persistent preview jobs. FFprobe analyzes media; FFmpeg creates silent H.264 context previews, WebP thumbnails, and sound waveforms.
+The interface uses React and TanStack Virtual. Electron owns all privileged operations. SQLite stores packs, assets, Collections, Smart Collection criteria, tags, and persistent preview jobs. FFprobe analyzes media; FFmpeg creates silent H.264 context previews, WebP thumbnails, and sound waveforms.
 
 The visual and interaction system is documented in [DESIGN.md](./DESIGN.md).
 

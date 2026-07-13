@@ -20,9 +20,12 @@ import type {
   AssetFilterSelection,
   AssetJobEvent,
   AssetKind,
+  AssetLibraryScope,
   AssetNavigationSnapshot,
   AssetQuery,
   AssetSortMode,
+  AssetSmartCollectionCriteria,
+  AssetSmartCollectionSummary,
   AssetSummary,
   AssetTrimRequest,
   AssetUpdateRequest,
@@ -39,6 +42,7 @@ import { useI18n } from './i18n'
 const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
   packs: [],
   collections: [],
+  smartCollections: [],
   tags: [],
   totalAssets: 0,
   favoriteCount: 0,
@@ -60,15 +64,7 @@ const EMPTY_FACETS: AssetFacets = {
   previewStatuses: []
 }
 
-type LibraryScope =
-  | { type: 'all' }
-  | { type: 'favorites' }
-  | { type: 'recent' }
-  | { type: 'pack'; id: string }
-  | { type: 'collection'; id: string }
-  | { type: 'tag'; name: string }
-
-function scopeFilters(scope: LibraryScope): Partial<AssetQuery> {
+function scopeFilters(scope: AssetLibraryScope): Partial<AssetQuery> {
   if (scope.type === 'pack') return { packIds: [scope.id] }
   if (scope.type === 'collection') return { collectionIds: [scope.id] }
   if (scope.type === 'tag') return { tags: [scope.name] }
@@ -78,10 +74,16 @@ function scopeFilters(scope: LibraryScope): Partial<AssetQuery> {
 }
 
 function scopeName(
-  scope: LibraryScope,
+  scope: AssetLibraryScope,
   navigation: AssetNavigationSnapshot,
+  activeSmartCollectionId: string | null,
   t: ReturnType<typeof useI18n>['t']
 ): string {
+  if (activeSmartCollectionId)
+    return (
+      navigation.smartCollections.find((collection) => collection.id === activeSmartCollectionId)
+        ?.name ?? t('app.smartCollection')
+    )
   if (scope.type === 'pack')
     return navigation.packs.find((pack) => pack.id === scope.id)?.name ?? t('app.pack')
   if (scope.type === 'collection')
@@ -104,7 +106,8 @@ function App(): JSX.Element {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [filters, setFilters] = useState<AssetFilterSelection>(emptyAssetFilters)
   const [facets, setFacets] = useState<AssetFacets>(EMPTY_FACETS)
-  const [scope, setScope] = useState<LibraryScope>({ type: 'all' })
+  const [scope, setScope] = useState<AssetLibraryScope>({ type: 'all' })
+  const [activeSmartCollectionId, setActiveSmartCollectionId] = useState<string | null>(null)
   const [sort, setSort] = useState<AssetSortMode>('name')
   const [density, setDensity] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -119,6 +122,11 @@ function App(): JSX.Element {
   const nextCursorRef = useRef<string | null>(null)
   const assetRequestRef = useRef(0)
   const kind: AssetKind | 'all' = filters.kinds.length === 1 ? filters.kinds[0] : 'all'
+
+  const currentSmartCollectionCriteria = useMemo<AssetSmartCollectionCriteria>(
+    () => ({ search, filters, scope, sort }),
+    [filters, scope, search, sort]
+  )
 
   const query = useMemo<AssetQuery>(
     () => ({
@@ -268,6 +276,7 @@ function App(): JSX.Element {
     )
     if (result.ok) {
       const alreadyShowingAll = scope.type === 'all'
+      setActiveSmartCollectionId(null)
       setScope({ type: 'all' })
       await loadNavigation()
       if (alreadyShowingAll) await loadAssets(false, false)
@@ -289,10 +298,23 @@ function App(): JSX.Element {
   }
 
   const toggleFilter = useCallback((field: AssetFilterField, value: string): void => {
+    setActiveSmartCollectionId(null)
     setFilters((current) => toggleAssetFilter(current, field, value))
   }, [])
 
-  const clearFilters = useCallback((): void => setFilters(emptyAssetFilters()), [])
+  const clearFilters = useCallback((): void => {
+    setActiveSmartCollectionId(null)
+    setFilters(emptyAssetFilters())
+  }, [])
+
+  const selectSmartCollection = useCallback((collection: AssetSmartCollectionSummary): void => {
+    setSearch(collection.criteria.search)
+    setDebouncedSearch(collection.criteria.search)
+    setFilters(collection.criteria.filters)
+    setScope(collection.criteria.scope)
+    setSort(collection.criteria.sort)
+    setActiveSmartCollectionId(collection.id)
+  }, [])
 
   const setAssetTrim = useCallback(
     async (request: AssetTrimRequest): Promise<ClipdockResult<void>> => {
@@ -404,27 +426,50 @@ function App(): JSX.Element {
         navigation={navigation}
         activePackId={scope.type === 'pack' ? scope.id : null}
         activeCollectionId={scope.type === 'collection' ? scope.id : null}
+        activeSmartCollectionId={activeSmartCollectionId}
         selectedTag={scope.type === 'tag' ? scope.name : null}
         favoriteOnly={scope.type === 'favorites'}
         recentlyUsed={scope.type === 'recent'}
         busy={busy}
-        onShowAll={() => setScope({ type: 'all' })}
-        onShowFavorites={() => setScope({ type: 'favorites' })}
+        onShowAll={() => {
+          setActiveSmartCollectionId(null)
+          setScope({ type: 'all' })
+        }}
+        onShowFavorites={() => {
+          setActiveSmartCollectionId(null)
+          setScope({ type: 'favorites' })
+        }}
         onShowRecentlyUsed={() => {
+          setActiveSmartCollectionId(null)
           setScope({ type: 'recent' })
           setSort('last-used')
         }}
         onSelectPack={(id) => {
+          setActiveSmartCollectionId(null)
           setFilters((current) => ({ ...current, packIds: [] }))
           setScope({ type: 'pack', id })
         }}
-        onSelectCollection={(id) => setScope({ type: 'collection', id })}
-        onSelectTag={(name) => setScope({ type: 'tag', name })}
+        onSelectCollection={(id) => {
+          setActiveSmartCollectionId(null)
+          setScope({ type: 'collection', id })
+        }}
+        onSelectSmartCollection={selectSmartCollection}
+        onSelectTag={(name) => {
+          setActiveSmartCollectionId(null)
+          setScope({ type: 'tag', name })
+        }}
         onAddPack={() => void addPack()}
         onRelinkPack={(id) => void mutate((bridge) => bridge.relinkPack(id))}
         onCreateCollection={() => {
           const name = window.prompt(t('dialog.collectionName'))
           if (name) void mutate((bridge) => bridge.createCollection(name))
+        }}
+        onCreateSmartCollection={() => {
+          const name = window.prompt(t('dialog.smartCollectionName'))
+          if (name)
+            void mutate((bridge) =>
+              bridge.saveSmartCollection({ name, criteria: currentSmartCollectionCriteria })
+            )
         }}
         onRenameCollection={(id, currentName) => {
           const name = window.prompt(t('dialog.collectionName'), currentName)
@@ -434,6 +479,31 @@ function App(): JSX.Element {
         onDeleteCollection={(id, name) => {
           if (window.confirm(t('dialog.deleteCollection', { name })))
             void mutate((bridge) => bridge.deleteCollection(id))
+        }}
+        onRenameSmartCollection={(collection) => {
+          const name = window.prompt(t('dialog.smartCollectionName'), collection.name)
+          if (name && name !== collection.name)
+            void mutate((bridge) =>
+              bridge.saveSmartCollection({
+                id: collection.id,
+                name,
+                criteria: collection.criteria
+              })
+            )
+        }}
+        onUpdateSmartCollection={(collection) =>
+          void mutate((bridge) =>
+            bridge.saveSmartCollection({
+              id: collection.id,
+              name: collection.name,
+              criteria: currentSmartCollectionCriteria
+            })
+          )
+        }
+        onDeleteSmartCollection={(collection) => {
+          if (!window.confirm(t('dialog.deleteSmartCollection', { name: collection.name }))) return
+          if (activeSmartCollectionId === collection.id) setActiveSmartCollectionId(null)
+          void mutate((bridge) => bridge.deleteSmartCollection(collection.id))
         }}
         onDropCollection={(ids, collectionId) =>
           ids.length && void mutate((bridge) => bridge.addAssetsToCollection(ids, collectionId))
@@ -447,7 +517,10 @@ function App(): JSX.Element {
             <input
               ref={searchRef}
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setActiveSmartCollectionId(null)
+                setSearch(event.target.value)
+              }}
               placeholder={t('toolbar.search')}
             />
             <kbd>/</kbd>
@@ -458,12 +531,13 @@ function App(): JSX.Element {
                 type="button"
                 key={value}
                 className={kind === value ? 'active' : ''}
-                onClick={() =>
+                onClick={() => {
+                  setActiveSmartCollectionId(null)
                   setFilters((current) => ({
                     ...current,
                     kinds: value === 'all' ? [] : [value]
                   }))
-                }
+                }}
               >
                 {value === 'all'
                   ? t('toolbar.all')
@@ -484,7 +558,10 @@ function App(): JSX.Element {
             />
             <select
               value={sort}
-              onChange={(event) => setSort(event.target.value as AssetSortMode)}
+              onChange={(event) => {
+                setActiveSmartCollectionId(null)
+                setSort(event.target.value as AssetSortMode)
+              }}
               aria-label={t('toolbar.sort')}
             >
               <option value="name">{t('toolbar.name')}</option>
@@ -563,7 +640,7 @@ function App(): JSX.Element {
               })}
             </strong>
           ) : null}
-          <span>{scopeName(scope, navigation, t)}</span>
+          <span>{scopeName(scope, navigation, activeSmartCollectionId, t)}</span>
         </div>
 
         <AssetGrid

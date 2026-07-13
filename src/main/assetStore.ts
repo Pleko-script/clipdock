@@ -4,6 +4,11 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { refreshAssetSearch } from './assetSearch'
 import { buildAssetWhere, queryAssetFacets } from './assetQuery'
+import {
+  deleteSmartCollection,
+  listSmartCollections,
+  saveSmartCollection
+} from './smartCollectionStore'
 import { ASSET_SCHEMA_VERSION, migrateAssetSchema, normalizeAssetPath } from './assetSchema'
 import {
   beginAssetTrim,
@@ -20,6 +25,7 @@ import type {
   AssetPackSummary,
   AssetQuery,
   AssetStatus,
+  AssetSmartCollectionSaveRequest,
   AssetSummary,
   AssetUpdateRequest,
   ClipdockResult,
@@ -115,6 +121,8 @@ export interface AssetStore {
   renameCollection: (collectionId: string, name: string) => ClipdockResult<void>
   deleteCollection: (collectionId: string) => ClipdockResult<void>
   addAssetsToCollection: (assetIds: string[], collectionId: string) => ClipdockResult<void>
+  saveSmartCollection: (request: AssetSmartCollectionSaveRequest) => ClipdockResult<void>
+  deleteSmartCollection: (smartCollectionId: string) => ClipdockResult<void>
   getAssetPath: (assetId: string) => ClipdockResult<StoredAssetPath>
   getAsset: (assetId: string) => ClipdockResult<AssetSummary>
   resolveAssetPath: (
@@ -522,6 +530,7 @@ class SqliteAssetStore implements AssetStore {
           createdAtMs: Number(row.created_at_ms),
           updatedAtMs: Number(row.updated_at_ms)
         })),
+        smartCollections: listSmartCollections(this.database),
         tags: tags.map((row) => row.name),
         totalAssets: Number(counts.total),
         favoriteCount: Number(counts.favorites ?? 0),
@@ -696,6 +705,30 @@ class SqliteAssetStore implements AssetStore {
     } catch (error) {
       return fail(
         error instanceof Error ? error.message : 'Assets could not be added to the collection.',
+        'update'
+      )
+    }
+  }
+
+  saveSmartCollection(request: AssetSmartCollectionSaveRequest): ClipdockResult<void> {
+    try {
+      saveSmartCollection(this.database, request, this.now(), this.createId)
+      return ok(undefined)
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : 'Smart Collection could not be saved.',
+        'update'
+      )
+    }
+  }
+
+  deleteSmartCollection(smartCollectionId: string): ClipdockResult<void> {
+    try {
+      deleteSmartCollection(this.database, smartCollectionId)
+      return ok(undefined)
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : 'Smart Collection could not be deleted.',
         'update'
       )
     }

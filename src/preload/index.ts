@@ -7,6 +7,7 @@ import type {
   AssetPage,
   AssetQuery,
   AssetScanResult,
+  AssetSmartCollectionSaveRequest,
   AssetTrimRequest,
   AssetUpdateRequest,
   ClipdockApi,
@@ -99,6 +100,18 @@ const clipdock: ClipdockApi = Object.freeze({
       'ClipDock could not update the collection.',
       limitedIds(assetIds, 256),
       collectionId
+    ),
+  saveSmartCollection: (request: AssetSmartCollectionSaveRequest) =>
+    invoke<void>(
+      channels.saveSmartCollection,
+      'ClipDock could not save the Smart Collection.',
+      request
+    ),
+  deleteSmartCollection: (smartCollectionId: string) =>
+    invoke<void>(
+      channels.deleteSmartCollection,
+      'ClipDock could not delete the Smart Collection.',
+      smartCollectionId
     ),
   revealAsset: (assetId: string) =>
     invoke<void>(channels.reveal, 'ClipDock could not reveal the asset.', assetId),

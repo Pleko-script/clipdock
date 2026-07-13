@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AssetStatus } from '../shared/clipdock'
 import { createAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 
-export const ASSET_SCHEMA_VERSION = 7
+export const ASSET_SCHEMA_VERSION = 8
 
 interface LegacySourceRow {
   id: string
@@ -125,6 +125,14 @@ function createTables(database: DatabaseSync): void {
       asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
       created_at_ms INTEGER NOT NULL,
       PRIMARY KEY (collection_id, asset_id)
+    );
+    CREATE TABLE IF NOT EXISTS smart_collections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL UNIQUE,
+      criteria_json TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS preview_jobs (
       id TEXT PRIMARY KEY,

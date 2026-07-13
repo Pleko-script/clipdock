@@ -11,6 +11,8 @@ export const assetIpcChannels = {
   renameCollection: 'clipdock:assets:rename-collection',
   deleteCollection: 'clipdock:assets:delete-collection',
   addToCollection: 'clipdock:assets:add-to-collection',
+  saveSmartCollection: 'clipdock:assets:save-smart-collection',
+  deleteSmartCollection: 'clipdock:assets:delete-smart-collection',
   reveal: 'clipdock:assets:reveal',
   regeneratePreviews: 'clipdock:assets:regenerate-previews',
   startDrag: 'clipdock:assets:start-drag',
@@ -31,6 +33,8 @@ export const assetInvokeChannels = [
   assetIpcChannels.renameCollection,
   assetIpcChannels.deleteCollection,
   assetIpcChannels.addToCollection,
+  assetIpcChannels.saveSmartCollection,
+  assetIpcChannels.deleteSmartCollection,
   assetIpcChannels.reveal,
   assetIpcChannels.regeneratePreviews
 ] as const

@@ -1,4 +1,9 @@
-import type { AssetFilterField, AssetFilterSelection, AssetQuery } from './clipdock'
+import type {
+  AssetFilterField,
+  AssetFilterSelection,
+  AssetQuery,
+  AssetSmartCollectionCriteria
+} from './clipdock'
 
 export function emptyAssetFilters(): AssetFilterSelection {
   return {
@@ -36,4 +41,42 @@ export function assetFiltersToQuery(filters: AssetFilterSelection): Partial<Asse
   return Object.fromEntries(
     Object.entries(filters).filter(([, values]) => values.length > 0)
   ) as Partial<AssetQuery>
+}
+
+export function assetFiltersFromQuery(query: AssetQuery): AssetFilterSelection {
+  return {
+    kinds: [...(query.kinds ?? [])],
+    packIds: [...(query.packIds ?? [])],
+    categoryPaths: [...(query.categoryPaths ?? [])],
+    aspects: [...(query.aspects ?? [])],
+    durationBuckets: [...(query.durationBuckets ?? [])],
+    overlayModes: [...(query.overlayModes ?? [])],
+    audioStates: [...(query.audioStates ?? [])],
+    formats: [...(query.formats ?? [])],
+    codecs: [...(query.codecs ?? [])],
+    statuses: [...(query.statuses ?? [])],
+    previewStatuses: [...(query.previewStatuses ?? [])]
+  }
+}
+
+export function smartCollectionCriteriaToQuery(criteria: AssetSmartCollectionCriteria): AssetQuery {
+  const scopeQuery: Partial<AssetQuery> =
+    criteria.scope.type === 'pack'
+      ? { packIds: [criteria.scope.id] }
+      : criteria.scope.type === 'collection'
+        ? { collectionIds: [criteria.scope.id] }
+        : criteria.scope.type === 'tag'
+          ? { tags: [criteria.scope.name] }
+          : criteria.scope.type === 'favorites'
+            ? { favoriteOnly: true }
+            : criteria.scope.type === 'recent'
+              ? { usedOnly: true }
+              : {}
+  return {
+    search: criteria.search || undefined,
+    ...assetFiltersToQuery(criteria.filters),
+    ...scopeQuery,
+    sort: criteria.sort,
+    limit: 200
+  }
 }

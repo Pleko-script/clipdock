@@ -6,14 +6,18 @@ import {
   type AssetDragRequest,
   type AssetDurationBucket,
   type AssetKind,
+  type AssetLibraryScope,
   type AssetQuery,
   type AssetSortMode,
+  type AssetSmartCollectionCriteria,
+  type AssetSmartCollectionSaveRequest,
   type AssetStatus,
   type AssetTrimRequest,
   type AssetUpdateRequest,
   type OverlayMode,
   type PreviewStatus
 } from '../shared/clipdock'
+import { assetFiltersFromQuery } from '../shared/assetFilters'
 
 const KINDS = new Set<AssetKind>(['transition', 'overlay', 'sound', 'unknown'])
 const OVERLAY_MODES = new Set<OverlayMode>(['alpha', 'screen', 'raw'])
@@ -101,6 +105,39 @@ export function parseAssetQuery(value: unknown): AssetQuery {
     statuses: enumStrings(input.statuses, ASSET_STATUSES),
     previewStatuses: enumStrings(input.previewStatuses, PREVIEW_STATUSES),
     sort
+  }
+}
+
+export function parseSmartCollectionCriteria(value: unknown): AssetSmartCollectionCriteria {
+  const input = record(value)
+  const scopeInput = record(input.scope)
+  const scopeType = scopeInput.type
+  const scope: AssetLibraryScope =
+    scopeType === 'pack' && validAssetId(scopeInput.id)
+      ? { type: 'pack' as const, id: validAssetId(scopeInput.id) }
+      : scopeType === 'collection' && validAssetId(scopeInput.id)
+        ? { type: 'collection' as const, id: validAssetId(scopeInput.id) }
+        : scopeType === 'tag' && validLabel(scopeInput.name, 64)
+          ? { type: 'tag' as const, name: validLabel(scopeInput.name, 64) }
+          : scopeType === 'favorites' || scopeType === 'recent'
+            ? { type: scopeType }
+            : { type: 'all' as const }
+  const parsedFilters = parseAssetQuery(record(input.filters))
+  return {
+    search: typeof input.search === 'string' ? input.search.trim().slice(0, 256) : '',
+    filters: assetFiltersFromQuery(parsedFilters),
+    scope,
+    sort: parseAssetQuery({ sort: input.sort }).sort ?? 'name'
+  }
+}
+
+export function parseSmartCollectionSave(value: unknown): AssetSmartCollectionSaveRequest {
+  const input = record(value)
+  const id = validAssetId(input.id)
+  return {
+    id: id || undefined,
+    name: validLabel(input.name),
+    criteria: parseSmartCollectionCriteria(input.criteria)
   }
 }
 

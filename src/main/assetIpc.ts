@@ -11,6 +11,7 @@ import { generateTrimmedAsset } from './assetTrim'
 import {
   parseAssetDragRequest,
   parseAssetQuery,
+  parseSmartCollectionSave,
   parseAssetTrim,
   parseAssetUpdate,
   validAssetId,
@@ -313,6 +314,12 @@ export function registerAssetIpc(): AssetIpcRegistration {
   )
   ipcMain.handle(channels.addToCollection, (_event, ids: unknown, collectionId: unknown) =>
     runtime.store.addAssetsToCollection(validAssetIds(ids), validAssetId(collectionId))
+  )
+  ipcMain.handle(channels.saveSmartCollection, (_event, request: unknown) =>
+    runtime.store.saveSmartCollection(parseSmartCollectionSave(request))
+  )
+  ipcMain.handle(channels.deleteSmartCollection, (_event, id: unknown) =>
+    runtime.store.deleteSmartCollection(validAssetId(id))
   )
   ipcMain.handle(channels.reveal, (_event, assetId: unknown) => {
     const asset = runtime.store.getAssetPath(validAssetId(assetId))

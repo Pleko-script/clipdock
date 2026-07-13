@@ -6,11 +6,13 @@ import {
   History,
   Library,
   Link2,
+  ListFilter,
   Pencil,
   Plus,
+  Save,
   Trash2
 } from 'lucide-react'
-import type { AssetNavigationSnapshot } from '../../../shared/clipdock'
+import type { AssetNavigationSnapshot, AssetSmartCollectionSummary } from '../../../shared/clipdock'
 import { useI18n } from '../i18n'
 
 function parseDraggedAssets(event: DragEvent): string[] {
@@ -26,6 +28,7 @@ export function AssetSidebar({
   navigation,
   activePackId,
   activeCollectionId,
+  activeSmartCollectionId,
   selectedTag,
   favoriteOnly,
   recentlyUsed,
@@ -35,17 +38,23 @@ export function AssetSidebar({
   onShowRecentlyUsed,
   onSelectPack,
   onSelectCollection,
+  onSelectSmartCollection,
   onSelectTag,
   onAddPack,
   onRelinkPack,
   onCreateCollection,
+  onCreateSmartCollection,
   onRenameCollection,
   onDeleteCollection,
+  onRenameSmartCollection,
+  onUpdateSmartCollection,
+  onDeleteSmartCollection,
   onDropCollection
 }: {
   navigation: AssetNavigationSnapshot
   activePackId: string | null
   activeCollectionId: string | null
+  activeSmartCollectionId: string | null
   selectedTag: string | null
   favoriteOnly: boolean
   recentlyUsed: boolean
@@ -55,12 +64,17 @@ export function AssetSidebar({
   onShowRecentlyUsed: () => void
   onSelectPack: (id: string) => void
   onSelectCollection: (id: string) => void
+  onSelectSmartCollection: (collection: AssetSmartCollectionSummary) => void
   onSelectTag: (tag: string) => void
   onAddPack: () => void
   onRelinkPack: (id: string) => void
   onCreateCollection: () => void
+  onCreateSmartCollection: () => void
   onRenameCollection: (id: string, currentName: string) => void
   onDeleteCollection: (id: string, currentName: string) => void
+  onRenameSmartCollection: (collection: AssetSmartCollectionSummary) => void
+  onUpdateSmartCollection: (collection: AssetSmartCollectionSummary) => void
+  onDeleteSmartCollection: (collection: AssetSmartCollectionSummary) => void
   onDropCollection: (assetIds: string[], collectionId: string) => void
 }): JSX.Element {
   const { language, setLanguage, t } = useI18n()
@@ -80,7 +94,12 @@ export function AssetSidebar({
         <button
           type="button"
           className={
-            !activePackId && !activeCollectionId && !selectedTag && !favoriteOnly && !recentlyUsed
+            !activePackId &&
+            !activeCollectionId &&
+            !activeSmartCollectionId &&
+            !selectedTag &&
+            !favoriteOnly &&
+            !recentlyUsed
               ? 'active'
               : ''
           }
@@ -90,12 +109,20 @@ export function AssetSidebar({
           <span>{t('sidebar.allAssets')}</span>
           <em>{navigation.totalAssets}</em>
         </button>
-        <button type="button" className={favoriteOnly ? 'active' : ''} onClick={onShowFavorites}>
+        <button
+          type="button"
+          className={favoriteOnly && !activeSmartCollectionId ? 'active' : ''}
+          onClick={onShowFavorites}
+        >
           <Heart size={17} />
           <span>{t('sidebar.favorites')}</span>
           <em>{navigation.favoriteCount}</em>
         </button>
-        <button type="button" className={recentlyUsed ? 'active' : ''} onClick={onShowRecentlyUsed}>
+        <button
+          type="button"
+          className={recentlyUsed && !activeSmartCollectionId ? 'active' : ''}
+          onClick={onShowRecentlyUsed}
+        >
           <History size={17} />
           <span>{t('sidebar.recentlyUsed')}</span>
           <em>{navigation.usedAssetCount}</em>
@@ -111,7 +138,7 @@ export function AssetSidebar({
           <div className="sidebar-item-row" key={pack.id}>
             <button
               type="button"
-              className={activePackId === pack.id ? 'active' : ''}
+              className={activePackId === pack.id && !activeSmartCollectionId ? 'active' : ''}
               onClick={() => onSelectPack(pack.id)}
               title={pack.rootPath}
             >
@@ -153,7 +180,9 @@ export function AssetSidebar({
           >
             <button
               type="button"
-              className={activeCollectionId === collection.id ? 'active' : ''}
+              className={
+                activeCollectionId === collection.id && !activeSmartCollectionId ? 'active' : ''
+              }
               onClick={() => onSelectCollection(collection.id)}
             >
               <FolderHeart size={16} />
@@ -182,6 +211,61 @@ export function AssetSidebar({
         ))}
       </section>
 
+      <section className="sidebar-group">
+        <header>
+          <span>{t('sidebar.smartCollections')}</span>
+          <button
+            type="button"
+            onClick={onCreateSmartCollection}
+            aria-label={t('sidebar.createSmartCollection')}
+          >
+            <Plus size={15} />
+          </button>
+        </header>
+        {navigation.smartCollections.length === 0 ? <p>{t('sidebar.noSmartCollections')}</p> : null}
+        {navigation.smartCollections.map((collection) => (
+          <div className="sidebar-item-row" key={collection.id}>
+            <button
+              type="button"
+              className={activeSmartCollectionId === collection.id ? 'active' : ''}
+              onClick={() => onSelectSmartCollection(collection)}
+              title={
+                collection.criteriaValid ? collection.name : t('sidebar.invalidSmartCollection')
+              }
+            >
+              <ListFilter size={16} />
+              <span>{collection.name}</span>
+            </button>
+            <span className="sidebar-item-actions">
+              <button
+                type="button"
+                onClick={() => onUpdateSmartCollection(collection)}
+                title={t('sidebar.updateSmartCollection')}
+                aria-label={t('sidebar.updateSmartNamed', { name: collection.name })}
+              >
+                <Save size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onRenameSmartCollection(collection)}
+                title={t('sidebar.renameSmartCollection')}
+                aria-label={t('sidebar.renameNamed', { name: collection.name })}
+              >
+                <Pencil size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDeleteSmartCollection(collection)}
+                title={t('sidebar.deleteSmartCollection')}
+                aria-label={t('sidebar.deleteNamed', { name: collection.name })}
+              >
+                <Trash2 size={13} />
+              </button>
+            </span>
+          </div>
+        ))}
+      </section>
+
       <section className="sidebar-group sidebar-tags">
         <header>
           <span>{t('sidebar.tags')}</span>
@@ -191,7 +275,7 @@ export function AssetSidebar({
             <button
               type="button"
               key={tag}
-              className={selectedTag === tag ? 'active' : ''}
+              className={selectedTag === tag && !activeSmartCollectionId ? 'active' : ''}
               onClick={() => onSelectTag(tag)}
             >
               {tag}

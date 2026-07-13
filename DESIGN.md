@@ -48,6 +48,7 @@ Both families are bundled locally. The UI never requires a network connection.
 - Sidebar: 214 px.
 - Toolbar: 56 px.
 - Filters: temporary toolbar popover; active values become removable chips and never reserve permanent grid width.
+- Smart Collections: a separate sidebar group for named, dynamic views of the current library.
 - Results bar: 31 px.
 - Video editor: centered above the asset results and collapsible, without an internal scroll container.
 - Editor columns: Organize on the left, media/range in the center, and file details on the right.
@@ -111,6 +112,8 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - `+` and `-` adjust thumbnail density.
 - Native drag contains original paths or prepared edit paths where configured.
 - Dropping on a Collection adds references and never moves source files.
+- Saving a Smart Collection stores stable search, scope, filter, and sort keys; opening it evaluates those criteria against current asset data.
+- Renaming, updating, or deleting a Smart Collection never changes source media or manual Collection membership.
 
 ## Anti-slop guardrails
 

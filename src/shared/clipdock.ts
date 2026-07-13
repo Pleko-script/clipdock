@@ -64,6 +64,14 @@ export interface AssetCollectionSummary {
   updatedAtMs: number
 }
 
+export type AssetLibraryScope =
+  | { type: 'all' }
+  | { type: 'favorites' }
+  | { type: 'recent' }
+  | { type: 'pack'; id: string }
+  | { type: 'collection'; id: string }
+  | { type: 'tag'; name: string }
+
 export interface AssetSummary {
   id: string
   packId: string
@@ -143,6 +151,28 @@ export interface AssetFilterSelection {
   previewStatuses: PreviewStatus[]
 }
 
+export interface AssetSmartCollectionCriteria {
+  search: string
+  filters: AssetFilterSelection
+  scope: AssetLibraryScope
+  sort: AssetSortMode
+}
+
+export interface AssetSmartCollectionSummary {
+  id: string
+  name: string
+  criteria: AssetSmartCollectionCriteria
+  criteriaValid: boolean
+  createdAtMs: number
+  updatedAtMs: number
+}
+
+export interface AssetSmartCollectionSaveRequest {
+  id?: string
+  name: string
+  criteria: AssetSmartCollectionCriteria
+}
+
 export type AssetFilterField = keyof AssetFilterSelection
 
 export interface AssetFacetOption {
@@ -175,6 +205,7 @@ export interface AssetPage {
 export interface AssetNavigationSnapshot {
   packs: AssetPackSummary[]
   collections: AssetCollectionSummary[]
+  smartCollections: AssetSmartCollectionSummary[]
   tags: string[]
   totalAssets: number
   favoriteCount: number
@@ -237,6 +268,8 @@ export interface ClipdockApi {
   renameCollection: (collectionId: string, name: string) => Promise<ClipdockResult<void>>
   deleteCollection: (collectionId: string) => Promise<ClipdockResult<void>>
   addAssetsToCollection: (assetIds: string[], collectionId: string) => Promise<ClipdockResult<void>>
+  saveSmartCollection: (request: AssetSmartCollectionSaveRequest) => Promise<ClipdockResult<void>>
+  deleteSmartCollection: (smartCollectionId: string) => Promise<ClipdockResult<void>>
   revealAsset: (assetId: string) => Promise<ClipdockResult<void>>
   regeneratePreviews: (assetIds: string[]) => Promise<ClipdockResult<void>>
   startAssetDrag: (request: AssetDragRequest) => void
