@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AssetStatus } from '../shared/clipdock'
 import { createAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 
-export const ASSET_SCHEMA_VERSION = 9
+export const ASSET_SCHEMA_VERSION = 10
 
 interface LegacySourceRow {
   id: string
@@ -79,6 +79,9 @@ function createTables(database: DatabaseSync): void {
       audio_codec TEXT,
       sample_rate INTEGER,
       channels INTEGER,
+      ucs_cat_id TEXT,
+      ucs_category TEXT,
+      ucs_subcategory TEXT,
       has_alpha INTEGER NOT NULL DEFAULT 0 CHECK (has_alpha IN (0,1)),
       metadata_json TEXT,
       favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0,1)),
@@ -159,7 +162,6 @@ function createTables(database: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_collection_assets_asset ON collection_assets(asset_id);
     CREATE INDEX IF NOT EXISTS idx_preview_jobs_queue ON preview_jobs(status, priority DESC, created_at_ms);
   `)
-  createAssetSearchIndex(database)
 }
 
 function ensureTrimColumns(database: DatabaseSync): void {
@@ -210,6 +212,18 @@ function ensurePosterColumns(database: DatabaseSync): void {
   if (!columns.has('poster_frame_ms'))
     database.exec('ALTER TABLE assets ADD COLUMN poster_frame_ms INTEGER')
   if (!columns.has('poster_path')) database.exec('ALTER TABLE assets ADD COLUMN poster_path TEXT')
+}
+
+function ensureUcsColumns(database: DatabaseSync): void {
+  const columns = new Set(
+    (database.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>).map(
+      (column) => column.name
+    )
+  )
+  for (const name of ['ucs_cat_id', 'ucs_category', 'ucs_subcategory']) {
+    if (!columns.has(name)) database.exec(`ALTER TABLE assets ADD COLUMN ${name} TEXT`)
+  }
+  database.exec('CREATE INDEX IF NOT EXISTS idx_assets_ucs_cat_id ON assets(ucs_cat_id)')
 }
 
 function legacyRootPath(source: LegacySourceRow): string {
@@ -342,6 +356,8 @@ export function migrateAssetSchema(database: DatabaseSync, timestamp: number): v
     ensureTrimColumns(database)
     ensureUsageColumns(database)
     ensurePosterColumns(database)
+    ensureUcsColumns(database)
+    createAssetSearchIndex(database)
     database.exec(
       'UPDATE assets SET rotation_degrees=0 WHERE rotation_degrees IS NULL OR rotation_degrees NOT IN (0,90,180,270)'
     )

@@ -311,6 +311,16 @@ export function AssetInspector({
                     </dd>
                   </div>
                 ) : null}
+                {primary.ucsCatId || primary.ucsCategory ? (
+                  <div>
+                    <dt>{t('inspector.ucs')}</dt>
+                    <dd>
+                      {[primary.ucsCatId, primary.ucsCategory, primary.ucsSubcategory]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>{t('inspector.compatibility')}</dt>
                   <dd className={`compatibility ${primary.compatibility}`}>

@@ -96,6 +96,9 @@ export interface AssetSummary {
   audioCodec: string | null
   sampleRate: number | null
   channels: number | null
+  ucsCatId: string | null
+  ucsCategory: string | null
+  ucsSubcategory: string | null
   hasAlpha: boolean
   favorite: boolean
   lastUsedAtMs: number | null
@@ -122,6 +125,7 @@ export interface AssetQuery {
   cursor?: string
   limit?: number
   search?: string
+  exactSearch?: boolean
   kinds?: AssetKind[]
   packIds?: string[]
   categoryPaths?: string[]
@@ -129,6 +133,7 @@ export interface AssetQuery {
   durationBuckets?: AssetDurationBucket[]
   overlayModes?: OverlayMode[]
   audioStates?: AssetAudioState[]
+  ucsCategories?: string[]
   collectionIds?: string[]
   tags?: string[]
   favoriteOnly?: boolean
@@ -148,6 +153,7 @@ export interface AssetFilterSelection {
   durationBuckets: AssetDurationBucket[]
   overlayModes: OverlayMode[]
   audioStates: AssetAudioState[]
+  ucsCategories: string[]
   formats: string[]
   codecs: string[]
   statuses: AssetStatus[]
@@ -156,6 +162,7 @@ export interface AssetFilterSelection {
 
 export interface AssetSmartCollectionCriteria {
   search: string
+  exactSearch: boolean
   filters: AssetFilterSelection
   scope: AssetLibraryScope
   sort: AssetSortMode
@@ -192,6 +199,7 @@ export interface AssetFacets {
   durations: AssetFacetOption[]
   overlayModes: AssetFacetOption[]
   audioStates: AssetFacetOption[]
+  ucsCategories: AssetFacetOption[]
   formats: AssetFacetOption[]
   codecs: AssetFacetOption[]
   statuses: AssetFacetOption[]

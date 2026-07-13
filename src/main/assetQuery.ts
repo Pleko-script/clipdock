@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { AssetFacetOption, AssetFacets, AssetQuery } from '../shared/clipdock'
+import { expandSfxSearch } from '../shared/sfxSynonyms'
 import { hasAssetSearchIndex } from './assetSearch'
 
 const ASPECT_SQL = `CASE
@@ -20,6 +21,14 @@ const AUDIO_SQL = `CASE
   ELSE 'silent' END`
 
 const CODEC_SQL = `LOWER(COALESCE(NULLIF(a.codec,''),NULLIF(a.audio_codec,''),'unknown'))`
+const UCS_VALUE_SQL = `LOWER(COALESCE(NULLIF(a.ucs_cat_id,''),NULLIF(a.ucs_category,''),''))`
+const UCS_LABEL_SQL = `TRIM(COALESCE(a.ucs_cat_id,'') || CASE
+  WHEN a.ucs_category IS NOT NULL OR a.ucs_subcategory IS NOT NULL THEN
+    CASE WHEN a.ucs_cat_id IS NOT NULL THEN ' · ' ELSE '' END ||
+    COALESCE(a.ucs_category,'') ||
+    CASE WHEN a.ucs_category IS NOT NULL AND a.ucs_subcategory IS NOT NULL THEN '-' ELSE '' END ||
+    COALESCE(a.ucs_subcategory,'')
+  ELSE '' END)`
 
 const FACET_KEYS: ReadonlyArray<keyof AssetFacets> = [
   'kinds',
@@ -29,6 +38,7 @@ const FACET_KEYS: ReadonlyArray<keyof AssetFacets> = [
   'durations',
   'overlayModes',
   'audioStates',
+  'ucsCategories',
   'formats',
   'codecs',
   'statuses',
@@ -78,6 +88,11 @@ export function buildAssetWhere(
   }
   addIn('audioStates', AUDIO_SQL, query.audioStates)
   addIn(
+    'ucsCategories',
+    UCS_VALUE_SQL,
+    query.ucsCategories?.map((value) => value.toLocaleLowerCase('en-US'))
+  )
+  addIn(
     'formats',
     'a.extension',
     query.formats?.map((value) => value.toLocaleLowerCase('en-US'))
@@ -109,16 +124,30 @@ export function buildAssetWhere(
 
   const search = query.search?.trim().toLocaleLowerCase('en-US')
   if (search) {
-    const ftsTerms = search.match(/[\p{L}\p{N}_-]+/gu) ?? []
-    if (hasAssetSearchIndex(database) && ftsTerms.length) {
+    const expanded = expandSfxSearch(search, query.exactSearch)
+    if (hasAssetSearchIndex(database) && expanded.termGroups.length) {
       where.push(`a.id IN (SELECT asset_id FROM asset_search WHERE asset_search MATCH ?)`)
-      params.push(ftsTerms.map((term) => `"${term.replaceAll('"', '""')}"*`).join(' AND '))
-    } else {
-      where.push(
-        `(LOWER(a.display_name) LIKE ? OR LOWER(a.relative_path) LIKE ? OR LOWER(p.name) LIKE ? OR LOWER(a.note) LIKE ? OR EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id=a.id AND LOWER(t.name) LIKE ?))`
+      params.push(
+        expanded.termGroups
+          .map((group) => {
+            const terms = group.map((term) => `"${term.replaceAll('"', '""')}"*`)
+            return terms.length === 1 ? terms[0] : `(${terms.join(' OR ')})`
+          })
+          .join(' AND ')
       )
-      const term = `%${search}%`
-      params.push(term, term, term, term, term)
+    } else {
+      const fieldMatch = `(LOWER(a.display_name) LIKE ? OR LOWER(a.relative_path) LIKE ? OR LOWER(p.name) LIKE ? OR LOWER(a.note) LIKE ? OR LOWER(COALESCE(a.ucs_cat_id,'')) LIKE ? OR LOWER(COALESCE(a.ucs_category,'')) LIKE ? OR LOWER(COALESCE(a.ucs_subcategory,'')) LIKE ? OR EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id=a.id AND LOWER(t.name) LIKE ?))`
+      where.push(
+        expanded.termGroups
+          .map((group) => `(${group.map(() => fieldMatch).join(' OR ')})`)
+          .join(' AND ')
+      )
+      for (const group of expanded.termGroups) {
+        for (const synonym of group) {
+          const term = `%${synonym}%`
+          params.push(term, term, term, term, term, term, term, term)
+        }
+      }
     }
   }
 
@@ -137,6 +166,7 @@ export function queryAssetFacets(database: DatabaseSync, query: AssetQuery): Ass
     durations: new Set(query.durationBuckets),
     overlayModes: new Set(query.overlayModes),
     audioStates: new Set(query.audioStates),
+    ucsCategories: new Set(query.ucsCategories),
     formats: new Set(query.formats),
     codecs: new Set(query.codecs),
     statuses: new Set(query.statuses),
@@ -155,6 +185,7 @@ export function queryAssetFacets(database: DatabaseSync, query: AssetQuery): Ass
       `SELECT a.pack_id, p.name pack_name, a.category_path, a.kind, a.media_type,
               ${ASPECT_SQL} aspect, ${DURATION_SQL} duration_bucket,
               a.overlay_mode, ${AUDIO_SQL} audio_state, a.extension,
+              ${UCS_VALUE_SQL} ucs_value, ${UCS_LABEL_SQL} ucs_label,
               ${CODEC_SQL} codec_value, a.status, a.preview_status
        FROM assets a JOIN asset_packs p ON p.id=a.pack_id ${whereSql}`
     )
@@ -176,6 +207,7 @@ export function queryAssetFacets(database: DatabaseSync, query: AssetQuery): Ass
     if (facet === 'durations') return row.duration_bucket
     if (facet === 'overlayModes') return row.overlay_mode
     if (facet === 'audioStates') return row.audio_state
+    if (facet === 'ucsCategories') return row.ucs_value
     if (facet === 'formats') return row.extension
     if (facet === 'codecs') return row.codec_value
     if (facet === 'statuses') return row.status
@@ -183,7 +215,8 @@ export function queryAssetFacets(database: DatabaseSync, query: AssetQuery): Ass
   }
   const eligible = (row: Record<string, string>, facet: keyof AssetFacets): boolean =>
     (facet !== 'aspects' || row.media_type === 'video') &&
-    (facet !== 'overlayModes' || row.kind === 'overlay')
+    (facet !== 'overlayModes' || row.kind === 'overlay') &&
+    (facet !== 'ucsCategories' || Boolean(row.ucs_value))
   for (const row of rows) {
     let failedMask = 0
     for (let index = 0; index < FACET_KEYS.length; index += 1) {
@@ -198,7 +231,15 @@ export function queryAssetFacets(database: DatabaseSync, query: AssetQuery): Ass
       const facet = FACET_KEYS[index]
       const otherFacetsMask = failedMask & ~(1 << index)
       if (!eligible(row, facet) || otherFacetsMask) continue
-      add(facet, valueFor(row, facet), facet === 'packs' ? row.pack_name : valueFor(row, facet))
+      add(
+        facet,
+        valueFor(row, facet),
+        facet === 'packs'
+          ? row.pack_name
+          : facet === 'ucsCategories'
+            ? row.ucs_label
+            : valueFor(row, facet)
+      )
     }
   }
 

@@ -115,6 +115,15 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - Missing assets expose **Relink Pack** in place; failed previews expose **Retry preview**. Filtered empty states expose **Clear filters**, while a truly empty library points to pack import.
 - Drag readiness is evaluated separately from preview readiness: a failed thumbnail does not block an otherwise ready original file. A requested trim or rotation blocks drag until its derivative is ready.
 
+## Search and UCS metadata
+
+- Search expands a reviewed, versioned set of German and English SFX equivalents locally. It is deterministic and never presented as AI or semantic search.
+- A visible **Related / Exact** control appears when a recognized term is entered. Related mode names the included terms; Exact mode keeps the original FTS behavior without dictionary expansion.
+- The dictionary covers whooshes, impacts, risers, ambience, glitches, transitions, and common Foley terms. UI language does not change the query expansion.
+- UCS `CatID`, category, and subcategory values are read from format and stream tags. A valid four-block `CatID_FXName_CreatorID_SourceID` filename supplies CatID when embedded metadata is absent.
+- Local round-trip checks with the bundled FFmpeg/FFprobe expose arbitrary UCS fields in FLAC and MP3. WAV, M4A, OGG, and raw AAC are treated as metadata-optional because equivalent generated samples did not reliably expose those custom fields.
+- UCS values are stored in dedicated SQLite columns, included in full-text search, exposed as a filter, and shown in File details. Source files are never renamed or rewritten.
+
 ## Interaction contract
 
 - `/` focuses search; search is debounced by 150 ms.

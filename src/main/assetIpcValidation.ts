@@ -90,6 +90,7 @@ export function parseAssetQuery(value: unknown): AssetQuery {
     cursor,
     limit: Math.min(200, Math.max(1, Number(input.limit) || 200)),
     search: typeof input.search === 'string' ? input.search.trim().slice(0, 256) : undefined,
+    exactSearch: input.exactSearch === true,
     kinds: kinds.length ? kinds : undefined,
     packIds: validAssetIds(input.packIds, 64),
     categoryPaths: strings(input.categoryPaths, 128, 512),
@@ -97,6 +98,9 @@ export function parseAssetQuery(value: unknown): AssetQuery {
     durationBuckets: enumStrings(input.durationBuckets, DURATION_BUCKETS),
     overlayModes: enumStrings(input.overlayModes, OVERLAY_MODES),
     audioStates: enumStrings(input.audioStates, AUDIO_STATES),
+    ucsCategories: strings(input.ucsCategories, 64, 128).map((value) =>
+      value.toLocaleLowerCase('en-US')
+    ),
     collectionIds: validAssetIds(input.collectionIds, 64),
     tags: strings(input.tags, 32, 64),
     favoriteOnly: input.favoriteOnly === true,
@@ -126,6 +130,7 @@ export function parseSmartCollectionCriteria(value: unknown): AssetSmartCollecti
   const parsedFilters = parseAssetQuery(record(input.filters))
   return {
     search: typeof input.search === 'string' ? input.search.trim().slice(0, 256) : '',
+    exactSearch: input.exactSearch === true,
     filters: assetFiltersFromQuery(parsedFilters),
     scope,
     sort: parseAssetQuery({ sort: input.sort }).sort ?? 'name'

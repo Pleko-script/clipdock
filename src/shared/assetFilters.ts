@@ -14,6 +14,7 @@ export function emptyAssetFilters(): AssetFilterSelection {
     durationBuckets: [],
     overlayModes: [],
     audioStates: [],
+    ucsCategories: [],
     formats: [],
     codecs: [],
     statuses: [],
@@ -52,6 +53,7 @@ export function assetFiltersFromQuery(query: AssetQuery): AssetFilterSelection {
     durationBuckets: [...(query.durationBuckets ?? [])],
     overlayModes: [...(query.overlayModes ?? [])],
     audioStates: [...(query.audioStates ?? [])],
+    ucsCategories: [...(query.ucsCategories ?? [])],
     formats: [...(query.formats ?? [])],
     codecs: [...(query.codecs ?? [])],
     statuses: [...(query.statuses ?? [])],
@@ -74,6 +76,7 @@ export function smartCollectionCriteriaToQuery(criteria: AssetSmartCollectionCri
               : {}
   return {
     search: criteria.search || undefined,
+    exactSearch: criteria.exactSearch,
     ...assetFiltersToQuery(criteria.filters),
     ...scopeQuery,
     sort: criteria.sort,

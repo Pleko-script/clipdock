@@ -18,6 +18,7 @@ const FACET_GROUPS = [
   { field: 'durationBuckets', facet: 'durations', title: 'filter.duration' },
   { field: 'overlayModes', facet: 'overlayModes', title: 'filter.overlayMode' },
   { field: 'audioStates', facet: 'audioStates', title: 'filter.audio' },
+  { field: 'ucsCategories', facet: 'ucsCategories', title: 'filter.ucsCategory' },
   { field: 'formats', facet: 'formats', title: 'filter.format' },
   { field: 'codecs', facet: 'codecs', title: 'filter.codec' },
   { field: 'statuses', facet: 'statuses', title: 'filter.assetStatus' },
@@ -56,6 +57,7 @@ function optionLabel(
   }
   if (field === 'audioStates')
     return value === 'with-audio' ? t('filter.withAudio') : t('filter.silent')
+  if (field === 'ucsCategories') return option.label || value
   if (field === 'statuses') {
     if (value === 'ready') return t('filter.ready')
     if (value === 'missing') return t('filter.missing')

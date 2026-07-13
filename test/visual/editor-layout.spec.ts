@@ -270,7 +270,7 @@ test.beforeAll(async () => {
     },
     {
       id: 'visual-sound',
-      displayName: 'Sound.wav',
+      displayName: 'Whoosh Sound.wav',
       filePath: sound,
       mediaType: 'audio',
       kind: 'sound',
@@ -337,6 +337,28 @@ test('panels resize, collapse independently, and persist', async () => {
   await expect(detailsHandle).toHaveAttribute('aria-valuenow', '212')
 })
 
+test('related SFX search can switch to exact mode in either language', async () => {
+  await page.setViewportSize(viewports[0])
+  const search = page.locator('.asset-search input')
+  await search.fill('Wusch')
+  const mode = page.locator('.search-mode')
+  await expect(mode).toBeVisible()
+  await expect(mode).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.asset-card').filter({ hasText: 'Whoosh Sound.wav' })).toBeVisible()
+
+  await mode.click()
+  await expect(mode).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.asset-empty')).toBeVisible()
+  await mode.click()
+  await expect(page.locator('.asset-card').filter({ hasText: 'Whoosh Sound.wav' })).toBeVisible()
+
+  await page.locator('.sidebar-language button').filter({ hasText: 'EN' }).click()
+  await expect(page.locator('.asset-card').filter({ hasText: 'Whoosh Sound.wav' })).toBeVisible()
+  await page.screenshot({ path: test.info().outputPath('related-search-1280x720.png') })
+  await page.locator('.sidebar-language button').filter({ hasText: 'DE' }).click()
+  await search.fill('')
+})
+
 test('portrait and landscape media remain contained at target resolutions', async () => {
   const testInfo = test.info()
   for (const viewport of viewports) {
@@ -375,7 +397,7 @@ test('portrait and landscape media remain contained at target resolutions', asyn
 
 test('audio waveform scrubs, loops, switches view, and owns playback', async () => {
   await page.setViewportSize(viewports[0])
-  const card = page.locator('.asset-card').filter({ hasText: 'Sound.wav' })
+  const card = page.locator('.asset-card').filter({ hasText: 'Whoosh Sound.wav' })
   await card.scrollIntoViewIfNeeded()
   await card.click()
 
@@ -437,7 +459,7 @@ test('actionable card and filtered-empty states expose recovery', async () => {
     { query: 'Failed Edit.mp4', selector: '.readiness.failed', name: 'failed' },
     { query: 'Unsupported.mp4', selector: '.readiness.unsupported', name: 'unsupported' },
     { query: 'Alpha.mov', selector: '.asset-card-signals', name: 'alpha' },
-    { query: 'Sound.wav', selector: '.asset-card-signals', name: 'audio' }
+    { query: 'Whoosh Sound.wav', selector: '.asset-card-signals', name: 'audio' }
   ]
   for (const state of states) {
     const card = page.locator('.asset-card').filter({ hasText: state.query })

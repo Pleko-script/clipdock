@@ -158,6 +158,9 @@ interface AssetRow {
   audio_codec: string | null
   sample_rate: number | null
   channels: number | null
+  ucs_cat_id: string | null
+  ucs_category: string | null
+  ucs_subcategory: string | null
   has_alpha: number
   favorite: number
   last_used_at_ms: number | null
@@ -974,6 +977,9 @@ class SqliteAssetStore implements AssetStore {
       audioCodec: row.audio_codec,
       sampleRate: row.sample_rate,
       channels: row.channels,
+      ucsCatId: row.ucs_cat_id,
+      ucsCategory: row.ucs_category,
+      ucsSubcategory: row.ucs_subcategory,
       hasAlpha: row.has_alpha === 1,
       favorite: row.favorite === 1,
       lastUsedAtMs: row.last_used_at_ms === null ? null : Number(row.last_used_at_ms),
@@ -999,10 +1005,11 @@ class SqliteAssetStore implements AssetStore {
 }
 
 export function openAssetStore(options: AssetStoreOptions): ClipdockResult<AssetStore> {
+  let database: DatabaseSync | null = null
   try {
     mkdirSync(dirname(options.databaseFile), { recursive: true })
     mkdirSync(options.previewCacheDir, { recursive: true })
-    const database = new DatabaseSync(resolve(options.databaseFile))
+    database = new DatabaseSync(resolve(options.databaseFile))
     const store = new SqliteAssetStore(
       database,
       options.now ?? Date.now,
@@ -1020,6 +1027,11 @@ export function openAssetStore(options: AssetStoreOptions): ClipdockResult<Asset
     }
     return ok(store)
   } catch (error) {
+    try {
+      database?.close()
+    } catch {
+      // Preserve the original open or migration failure.
+    }
     return fail(error instanceof Error ? error.message : 'Asset store could not be opened.', 'open')
   }
 }

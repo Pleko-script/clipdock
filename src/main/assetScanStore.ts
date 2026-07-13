@@ -21,6 +21,9 @@ export interface ScannedAssetInput {
   audioCodec: string | null
   sampleRate: number | null
   channels: number | null
+  ucsCatId: string | null
+  ucsCategory: string | null
+  ucsSubcategory: string | null
   hasAlpha: boolean
   metadataJson: string | null
 }
@@ -70,9 +73,9 @@ export function upsertScannedAssetRecord(
         id, pack_id, relative_path, category_path, display_name, file_path, normalized_file_path,
         extension, kind, media_type, overlay_mode, compatibility, size_bytes, modified_at_ms,
         duration_ms, width_pixels, height_pixels, fps, codec, audio_codec, sample_rate, channels,
-        has_alpha, metadata_json, favorite, note, status, preview_status, thumbnail_path,
+        ucs_cat_id, ucs_category, ucs_subcategory, has_alpha, metadata_json, favorite, note, status, preview_status, thumbnail_path,
         preview_path, created_at_ms, updated_at_ms, last_error_message
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'ready', 'pending', NULL, NULL, ?, ?, NULL)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'ready', 'pending', NULL, NULL, ?, ?, NULL)
       ON CONFLICT DO UPDATE SET
         pack_id=excluded.pack_id, relative_path=excluded.relative_path, category_path=excluded.category_path,
         display_name=excluded.display_name, file_path=excluded.file_path, normalized_file_path=excluded.normalized_file_path,
@@ -80,7 +83,9 @@ export function upsertScannedAssetRecord(
         size_bytes=excluded.size_bytes, modified_at_ms=excluded.modified_at_ms, duration_ms=excluded.duration_ms,
         width_pixels=excluded.width_pixels, height_pixels=excluded.height_pixels, fps=excluded.fps,
         codec=excluded.codec, audio_codec=excluded.audio_codec, sample_rate=excluded.sample_rate,
-        channels=excluded.channels, has_alpha=excluded.has_alpha, metadata_json=excluded.metadata_json,
+        channels=excluded.channels, ucs_cat_id=excluded.ucs_cat_id,
+        ucs_category=excluded.ucs_category, ucs_subcategory=excluded.ucs_subcategory,
+        has_alpha=excluded.has_alpha, metadata_json=excluded.metadata_json,
         status='ready', preview_status=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN 'pending' ELSE assets.preview_status END,
         thumbnail_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.thumbnail_path END,
         preview_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.preview_path END,
@@ -113,6 +118,9 @@ export function upsertScannedAssetRecord(
       input.audioCodec,
       input.sampleRate,
       input.channels,
+      input.ucsCatId ?? null,
+      input.ucsCategory ?? null,
+      input.ucsSubcategory ?? null,
       input.hasAlpha ? 1 : 0,
       input.metadataJson,
       timestamp,

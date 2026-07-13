@@ -26,30 +26,30 @@ ClipDock keeps reusable editing assets out of scattered folders and inside one v
 
 Effect libraries grow quickly. Finding one transition or sound often means opening folders, guessing from filenames, and previewing files one by one. ClipDock turns that folder archive into a focused editing tool:
 
-- **See the effect before using it.** Transitions and overlays are rendered against local demo scenes; sounds get cached waveforms.
+- **See the effect before using it.** Transitions and overlays are rendered against local demo scenes; sounds get cached waveforms and optional spectrograms.
 - **Stay inside your existing workflow.** Drag one or multiple real media files into DaVinci Resolve, Adobe Premiere Pro, or another editor.
 - **Organize without touching disk.** Packs, Collections, Smart Collections, tags, and favorites live in ClipDock while source files stay where they are.
 - **Work without an account.** Everything—including metadata, search, and generated previews—runs locally.
 
 ## Features
 
-|              | Feature                     | What it does                                                                                                |
-| ------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Browse**   | Scrubbable asset grid       | Maps horizontal pointer position to a muted cached preview while keeping large libraries virtualized.       |
-| **Preview**  | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.               |
-| **Find**     | Search and live filters     | Combines faceted media filters with live result counts while keeping every result page capped at 200.       |
-| **Reuse**    | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                     |
-| **Organize** | Collections and saved views | Groups assets manually or saves the current search, scope, filters, and sort as a dynamic Smart Collection. |
-| **Classify** | Automatic asset detection   | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.            |
-| **Inspect**  | Media metadata              | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.      |
-| **Trim**     | Non-destructive In / Out    | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                   |
-| **Rotate**   | Quarter-turn video edits    | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                  |
-| **Listen**   | Preview volume              | Plays available clip audio with a persistent volume slider and mute control.                                |
-| **Poster**   | Custom poster frames        | Uses the current video frame as a persistent card image without changing the source.                        |
-| **Language** | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                               |
-| **Deliver**  | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.             |
-| **Recover**  | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                        |
-| **Sync**     | Automatic pack watching     | Debounces external file changes and reconciles only affected paths while the app is running.                |
+|              | Feature                     | What it does                                                                                                 |
+| ------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Browse**   | Scrubbable asset grid       | Maps horizontal pointer position to a muted cached preview while keeping large libraries virtualized.        |
+| **Preview**  | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.                |
+| **Find**     | Bilingual SFX search        | Expands reviewed German/English sound terms locally, offers exact-only mode, and reads available UCS fields. |
+| **Reuse**    | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                      |
+| **Organize** | Collections and saved views | Groups assets manually or saves the current search, scope, filters, and sort as a dynamic Smart Collection.  |
+| **Classify** | Automatic asset detection   | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.             |
+| **Inspect**  | Media metadata              | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.       |
+| **Trim**     | Non-destructive In / Out    | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                    |
+| **Rotate**   | Quarter-turn video edits    | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                   |
+| **Listen**   | Waveform audition           | Scrubs sounds, sets non-destructive loops, and shares one persistent volume across every preview surface.    |
+| **Poster**   | Custom poster frames        | Uses the current video frame as a persistent card image without changing the source.                         |
+| **Language** | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                                |
+| **Deliver**  | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.              |
+| **Recover**  | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                         |
+| **Sync**     | Automatic pack watching     | Debounces external file changes and reconciles only affected paths while the app is running.                 |
 
 ## Workflow
 
@@ -59,7 +59,7 @@ Choose **Add Pack** and select a folder containing effects. The selected folder 
 
 ### 2. Find and preview
 
-ClipDock scans supported media, stores metadata first, and generates previews in the background. While ClipDock is running, linked pack folders are watched for debounced additions, changes, moves, and removals; manual rescan remains available as a recovery action. Search, filter, favorite, or group assets into Collections. Save a useful result view as a Smart Collection to re-run the same criteria against the current library. Hover a card for a quick preview or press `Space` for Quick Look.
+ClipDock scans supported media, stores metadata first, and generates previews in the background. While ClipDock is running, linked pack folders are watched for debounced additions, changes, moves, and removals; manual rescan remains available as a recovery action. Search expands a small, versioned German/English SFX dictionary such as `whoosh`, `swoosh`, and `Wusch`; the visible **Exact** switch disables that expansion. Available UCS CatID, category, and subcategory metadata participates in search and filtering without renaming source files. Save a useful result view as a Smart Collection to re-run the same criteria against the current library.
 
 ### 3. Drag into the edit
 

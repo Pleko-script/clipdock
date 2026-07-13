@@ -68,6 +68,9 @@ async function scanMediaFile(
     audioCodec: null as string | null,
     sampleRate: null as number | null,
     channels: null as number | null,
+    ucsCatId: null as string | null,
+    ucsCategory: null as string | null,
+    ucsSubcategory: null as string | null,
     hasAlpha: false,
     metadataJson: null as string | null
   }
@@ -95,6 +98,9 @@ async function scanMediaFile(
     audioCodec: metadata.audioCodec,
     sampleRate: metadata.sampleRate,
     channels: metadata.channels,
+    ucsCatId: metadata.ucsCatId,
+    ucsCategory: metadata.ucsCategory,
+    ucsSubcategory: metadata.ucsSubcategory,
     hasAlpha: metadata.hasAlpha,
     metadataJson: metadata.metadataJson
   })

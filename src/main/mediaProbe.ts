@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { basename, extname } from 'node:path'
 
 const requireFromMain = createRequire(__filename)
 const ffprobeStatic = requireFromMain('ffprobe-static') as { path?: string }
@@ -14,6 +15,9 @@ export interface MediaMetadata {
   audioCodec: string | null
   sampleRate: number | null
   channels: number | null
+  ucsCatId: string | null
+  ucsCategory: string | null
+  ucsSubcategory: string | null
   hasAlpha: boolean
 }
 
@@ -28,12 +32,14 @@ interface FfprobeStream {
   pix_fmt?: string
   sample_rate?: string
   channels?: number
+  tags?: Record<string, string>
 }
 
 interface FfprobeFormat {
   duration?: string
   format_name?: string
   bit_rate?: string
+  tags?: Record<string, string>
 }
 
 interface FfprobeOutput {
@@ -102,11 +108,50 @@ function boundedMetadataJson(output: FfprobeOutput): string | null {
   return json.length > 8000 ? json.slice(0, 8000) : json
 }
 
-function metadataFromFfprobe(output: FfprobeOutput): MediaMetadata {
+function ucsValue(value: string | undefined): string | null {
+  const normalized = value?.trim().replace(/\s+/g, ' ').slice(0, 128)
+  return normalized || null
+}
+
+function ucsMetadata(
+  output: FfprobeOutput,
+  filePath?: string
+): Pick<MediaMetadata, 'ucsCatId' | 'ucsCategory' | 'ucsSubcategory'> {
+  const tags = new Map<string, string>()
+  for (const source of [
+    output.format?.tags,
+    ...(output.streams ?? []).map((stream) => stream.tags)
+  ]) {
+    for (const [key, value] of Object.entries(source ?? {})) {
+      const normalizedKey = key.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/g, '')
+      if (!tags.has(normalizedKey)) tags.set(normalizedKey, value)
+    }
+  }
+  const value = (...keys: string[]): string | null =>
+    ucsValue(keys.map((key) => tags.get(key)).find(Boolean))
+  let ucsCategory = value('ucscategory', 'category')
+  let ucsSubcategory = value('ucssubcategory', 'subcategory')
+  const categoryFull = value('ucscategoryfull', 'categoryfull')
+  if (categoryFull && (!ucsCategory || !ucsSubcategory)) {
+    const [category, ...subcategory] = categoryFull.split(/\s*[-/]\s*/)
+    ucsCategory ??= ucsValue(category)
+    ucsSubcategory ??= ucsValue(subcategory.join('-'))
+  }
+  let ucsCatId = value('ucscatid', 'catid')
+  if (!ucsCatId && filePath) {
+    const blocks = basename(filePath, extname(filePath)).split('_')
+    const candidate = blocks.length >= 4 ? blocks[0].split('-')[0] : ''
+    if (/^[A-Z]{2,8}[A-Za-z0-9]{1,18}$/.test(candidate)) ucsCatId = candidate
+  }
+  return { ucsCatId, ucsCategory, ucsSubcategory }
+}
+
+export function metadataFromFfprobe(output: FfprobeOutput, filePath?: string): MediaMetadata {
   const videoStream = (output.streams ?? []).find((stream) => stream.codec_type === 'video')
   const audioStream = (output.streams ?? []).find((stream) => stream.codec_type === 'audio')
   const durationMs = durationToMs(videoStream?.duration) ?? durationToMs(output.format?.duration)
   const pixelFormat = videoStream?.pix_fmt?.toLowerCase() ?? ''
+  const ucs = ucsMetadata(output, filePath)
 
   return {
     durationMs,
@@ -118,6 +163,7 @@ function metadataFromFfprobe(output: FfprobeOutput): MediaMetadata {
     audioCodec: audioStream?.codec_name ?? null,
     sampleRate: parseNumber(audioStream?.sample_rate),
     channels: audioStream?.channels ?? null,
+    ...ucs,
     hasAlpha:
       pixelFormat.includes('rgba') ||
       pixelFormat.includes('argb') ||
@@ -165,7 +211,7 @@ export async function probeMedia(filePath: string): Promise<MediaMetadata> {
       }
 
       try {
-        resolve(metadataFromFfprobe(JSON.parse(Buffer.concat(chunks).toString('utf8'))))
+        resolve(metadataFromFfprobe(JSON.parse(Buffer.concat(chunks).toString('utf8')), filePath))
       } catch (error) {
         reject(error)
       }

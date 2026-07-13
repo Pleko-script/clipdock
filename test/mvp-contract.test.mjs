@@ -25,6 +25,7 @@ const main = read('src/main/index.ts')
 const ipc = read('src/main/assetIpc.ts')
 const storeSource = read('src/main/assetStore.ts')
 const schema = read('src/main/assetSchema.ts')
+const searchSource = read('src/main/assetSearch.ts')
 const preview = read('src/main/assetPreview.ts')
 const scannerSource = read('src/main/assetScanner.ts')
 const trim = read('src/main/assetTrim.ts')
@@ -39,6 +40,7 @@ const audioEditor = read('src/renderer/src/components/AudioPreviewEditor.tsx')
 const panelResizeHandle = read('src/renderer/src/components/PanelResizeHandle.tsx')
 const sidebar = read('src/renderer/src/components/AssetSidebar.tsx')
 const i18n = read('src/renderer/src/i18n.tsx')
+const synonymSource = read('src/shared/sfxSynonyms.ts')
 const rendererCss = [
   read('src/renderer/src/assets/base.css'),
   read('src/renderer/src/assets/main.css'),
@@ -94,6 +96,7 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetWatcher.ts'),
         join(projectRoot, 'src/shared/clipdock.ts'),
         join(projectRoot, 'src/shared/assetFilters.ts'),
+        join(projectRoot, 'src/shared/sfxSynonyms.ts'),
         join(projectRoot, 'src/renderer/src/previewScrub.ts'),
         join(projectRoot, 'src/renderer/src/editorPanelLayout.ts'),
         join(projectRoot, 'src/renderer/src/assetReadiness.ts'),
@@ -121,7 +124,8 @@ function compileRuntimeModules() {
     scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js')),
     editorLayout: requireCompiled(join(outDir, 'src/renderer/src/editorPanelLayout.js')),
     readiness: requireCompiled(join(outDir, 'src/renderer/src/assetReadiness.js')),
-    audioPreview: requireCompiled(join(outDir, 'src/renderer/src/audioPreview.js'))
+    audioPreview: requireCompiled(join(outDir, 'src/renderer/src/audioPreview.js')),
+    synonyms: requireCompiled(join(outDir, 'src/shared/sfxSynonyms.js'))
   }
 }
 
@@ -246,6 +250,8 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
     durationBuckets: ['under-1s', 'DROP TABLE assets'],
     overlayModes: ['alpha', 'invalid'],
     audioStates: ['with-audio', 'invalid'],
+    ucsCategories: [' WHSHWhoosh ', 42],
+    exactSearch: true,
     codecs: ['H264', '', 42],
     statuses: ['missing', 'removed'],
     previewStatuses: ['failed', 'running']
@@ -255,6 +261,8 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
   assert.deepEqual(facetQuery.durationBuckets, ['under-1s'])
   assert.deepEqual(facetQuery.overlayModes, ['alpha'])
   assert.deepEqual(facetQuery.audioStates, ['with-audio'])
+  assert.deepEqual(facetQuery.ucsCategories, ['whshwhoosh'])
+  assert.equal(facetQuery.exactSearch, true)
   assert.deepEqual(facetQuery.codecs, ['h264'])
   assert.deepEqual(facetQuery.statuses, ['missing'])
   assert.deepEqual(facetQuery.previewStatuses, ['failed'])
@@ -271,6 +279,7 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
 
   const smartCriteria = runtime.validation.parseSmartCollectionCriteria({
     search: ' wipe ',
+    exactSearch: true,
     filters: {
       kinds: ['transition', 'hacked'],
       formats: ['MOV', '.exe'],
@@ -280,6 +289,7 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
     sort: 'modified'
   })
   assert.equal(smartCriteria.search, 'wipe')
+  assert.equal(smartCriteria.exactSearch, true)
   assert.deepEqual(smartCriteria.filters.kinds, ['transition'])
   assert.deepEqual(smartCriteria.filters.formats, ['.mov'])
   assert.deepEqual(smartCriteria.filters.codecs, ['prores'])
@@ -361,6 +371,35 @@ test('classification uses pack-relative paths and accepts media only', () => {
   )
   assert.equal(runtime.classification.inferAssetKind('plain/clip.mp4', 'video'), 'unknown')
   assert.equal(runtime.classification.inferAssetKind('anything.wav', 'audio'), 'sound')
+})
+
+test('bilingual SFX expansion and UCS parsing are deterministic', () => {
+  assert.equal(runtime.synonyms.SFX_SYNONYM_DICTIONARY_VERSION, 1)
+  const english = runtime.synonyms.expandSfxSearch('whoosh')
+  const german = runtime.synonyms.expandSfxSearch('Wusch')
+  assert.equal(english.expanded, true)
+  assert.deepEqual(german.termGroups, english.termGroups)
+  assert.deepEqual(runtime.synonyms.expandSfxSearch('Wusch', true).termGroups, [['wusch']])
+
+  const embedded = runtime.probe.metadataFromFfprobe({
+    streams: [{ codec_type: 'audio', codec_name: 'flac' }],
+    format: {
+      duration: '1',
+      tags: {
+        CatID: 'WHSHWhoosh',
+        CategoryFull: 'WHOOSH-DESIGNED'
+      }
+    }
+  })
+  assert.equal(embedded.ucsCatId, 'WHSHWhoosh')
+  assert.equal(embedded.ucsCategory, 'WHOOSH')
+  assert.equal(embedded.ucsSubcategory, 'DESIGNED')
+
+  const filename = runtime.probe.metadataFromFfprobe(
+    { streams: [{ codec_type: 'audio' }], format: { duration: '1' } },
+    'GUNAuto_Uzi fire_TN_DORY.wav'
+  )
+  assert.equal(filename.ucsCatId, 'GUNAuto')
 })
 
 test('hover scrub timing, pointer mapping, and concurrency are deterministic', () => {
@@ -542,6 +581,7 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
 
     const transitionCriteria = {
       search: '',
+      exactSearch: false,
       filters: {
         ...runtime.filters.emptyAssetFilters(),
         kinds: ['transition']
@@ -745,16 +785,23 @@ test('faceted first-page query stays responsive with 10,000 assets', () => {
   let store
   try {
     mkdirSync(packRoot, { recursive: true })
-    store = runtime.store.openAssetStore({
+    const initialStore = runtime.store.openAssetStore({
       databaseFile,
       previewCacheDir: join(workspace, 'previews'),
       createId: createIdGenerator('facet')
-    }).value
+    })
+    assert.equal(initialStore.ok, true, initialStore.error?.message)
+    store = initialStore.value
     const packId = store.createPack(packRoot).value
     store.close()
     store = null
 
     const database = new DatabaseSync(databaseFile)
+    const fullTextAvailable = Boolean(
+      database
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_search'`)
+        .get()
+    )
     const insert = database.prepare(`
       INSERT INTO assets (
         id, pack_id, relative_path, category_path, display_name, file_path,
@@ -773,14 +820,15 @@ test('faceted first-page query stays responsive with 10,000 assets', () => {
       const width = audio ? null : orientation === 0 ? 1080 : orientation === 1 ? 1920 : 1080
       const height = audio ? null : orientation === 0 ? 1920 : orientation === 1 ? 1080 : 1080
       const extension = audio ? '.wav' : index % 2 ? '.mp4' : '.mov'
-      const relativePath = `Category ${index % 12}/asset-${index}${extension}`
+      const displayName = index % 400 === 2 ? `whoosh-${index}` : `asset-${index}`
+      const relativePath = `Category ${index % 12}/${displayName}${extension}`
       const filePath = join(packRoot, relativePath)
       insert.run(
         `asset-${index}`,
         packId,
         relativePath,
         `Category ${index % 12}`,
-        `asset-${index}`,
+        displayName,
         filePath,
         filePath.toLocaleLowerCase('en-US'),
         extension,
@@ -803,12 +851,20 @@ test('faceted first-page query stays responsive with 10,000 assets', () => {
       )
     }
     database.exec('COMMIT')
+    if (fullTextAvailable)
+      database.exec(`
+        INSERT INTO asset_search
+          (asset_id, filename, pack, path, tags, note, ucs_cat_id, ucs_category, ucs_subcategory)
+        SELECT id, display_name, 'Synthetic Pack', relative_path, '', '', '', '', '' FROM assets
+      `)
     database.close()
 
-    store = runtime.store.openAssetStore({
+    const reopenedStore = runtime.store.openAssetStore({
       databaseFile,
       previewCacheDir: join(workspace, 'previews')
-    }).value
+    })
+    assert.equal(reopenedStore.ok, true, reopenedStore.error?.message)
+    store = reopenedStore.value
     const started = performance.now()
     const result = store.queryAssets({
       limit: 200,
@@ -829,6 +885,14 @@ test('faceted first-page query stays responsive with 10,000 assets', () => {
     assert.ok(result.value.facets.aspects.some((option) => option.value === 'square'))
     assert.ok(result.value.facets.kinds.some((option) => option.value === 'unknown'))
     assert.ok(elapsed < 100, `First faceted page took ${elapsed.toFixed(1)} ms`)
+    if (fullTextAvailable) {
+      const synonymStarted = performance.now()
+      const synonymResult = store.queryAssets({ search: 'wusch', kinds: ['sound'], limit: 200 })
+      const synonymElapsed = performance.now() - synonymStarted
+      assert.equal(synonymResult.ok, true, synonymResult.error?.message)
+      assert.equal(synonymResult.value.totalCount, 25)
+      assert.ok(synonymElapsed < 100, `Synonym FTS page took ${synonymElapsed.toFixed(1)} ms`)
+    }
   } finally {
     try {
       store?.close()
@@ -847,7 +911,7 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
   const sounds = join(packRoot, 'SFX')
   const video = join(transitions, 'wipe.mp4')
   const overlay = join(overlays, 'dust.mov')
-  const audio = join(sounds, 'impact.wav')
+  const audio = join(sounds, 'WHSHWhoosh_Fast Sweep_CD_Test.flac')
   const previewDir = join(workspace, 'previews')
   const ffmpeg = createRequire(join(projectRoot, 'package.json'))('ffmpeg-static')
   let store
@@ -903,8 +967,14 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
         'sine=frequency=880:sample_rate=48000',
         '-t',
         '0.4',
+        '-metadata',
+        'CatID=WHSHWhoosh',
+        '-metadata',
+        'Category=WHOOSH',
+        '-metadata',
+        'SubCategory=DESIGNED',
         '-c:a',
-        'pcm_s16le',
+        'flac',
         audio
       ],
       { encoding: 'utf8' }
@@ -927,6 +997,28 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     const transition = assets.find((asset) => asset.kind === 'transition')
     const alphaOverlay = assets.find((asset) => asset.kind === 'overlay')
     const sound = assets.find((asset) => asset.kind === 'sound')
+    assert.equal(sound.ucsCatId, 'WHSHWhoosh')
+    assert.equal(sound.ucsCategory, 'WHOOSH')
+    assert.equal(sound.ucsSubcategory, 'DESIGNED')
+    assert.deepEqual(
+      store.queryAssets({ search: 'wusch' }).value.items.map((asset) => asset.id),
+      [sound.id]
+    )
+    assert.deepEqual(
+      store
+        .queryAssets({ search: 'whoosh', exactSearch: true })
+        .value.items.map((asset) => asset.id),
+      [sound.id]
+    )
+    assert.equal(store.queryAssets({ search: 'wusch', exactSearch: true }).value.totalCount, 0)
+    assert.deepEqual(
+      store.queryAssets({ ucsCategories: ['whshwhoosh'] }).value.items.map((asset) => asset.id),
+      [sound.id]
+    )
+    assert.equal(
+      store.queryAssets({}).value.facets.ucsCategories[0].label,
+      'WHSHWhoosh · WHOOSH-DESIGNED'
+    )
     assert.equal(alphaOverlay.hasAlpha, true)
     assert.equal(alphaOverlay.overlayMode, 'alpha')
     assert.deepEqual(
@@ -937,7 +1029,7 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
       store.queryAssets({ audioStates: ['with-audio'] }).value.items.map((asset) => asset.id),
       [sound.id]
     )
-    assert.equal(store.queryAssets({ formats: ['.mov', '.wav'] }).value.totalCount, 2)
+    assert.equal(store.queryAssets({ formats: ['.mov', '.flac'] }).value.totalCount, 2)
     assert.equal(
       store.queryAssets({ statuses: ['ready'], previewStatuses: ['pending'] }).value.totalCount,
       3
@@ -1080,7 +1172,7 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
 
     rmSync(audio)
     const removed = await runtime.scanner.reconcileAssetPackPaths(store, pack, [
-      join('SFX', 'impact.wav')
+      join('SFX', 'WHSHWhoosh_Fast Sweep_CD_Test.flac')
     ])
     assert.equal(removed.scannedFiles, 0)
     assert.equal(store.getAsset(sound.id).value.status, 'missing')
@@ -1271,6 +1363,15 @@ test('package, docs, and preview pipeline describe the shipped system', () => {
     assert.ok(packageJson.dependencies[dependency])
   }
   assert.match(schema, /BEGIN IMMEDIATE/)
+  assert.match(schema, /ASSET_SCHEMA_VERSION = 10/)
+  assert.match(schema, /ucs_cat_id TEXT/)
+  assert.match(searchSource, /USING fts5/)
+  assert.match(searchSource, /USING fts4/)
+  assert.match(searchSource, /ucs_subcategory/)
+  assert.match(synonymSource, /SFX_SYNONYM_DICTIONARY_VERSION = 1/)
+  assert.match(app, /relatedSearch\.expanded/)
+  assert.match(app, /aria-pressed=\{!exactSearch\}/)
+  assert.match(inspector, /primary\.ucsCatId/)
   assert.match(schema, /rotation_degrees=0 WHERE rotation_degrees IS NULL/)
   assert.match(storeSource, /private transaction/)
   assert.match(preview, /PREVIEW_PIPELINE_VERSION = 4/)

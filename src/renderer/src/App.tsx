@@ -34,6 +34,7 @@ import type {
   ClipdockApi,
   ClipdockResult
 } from '../../shared/clipdock'
+import { expandSfxSearch } from '../../shared/sfxSynonyms'
 import { AssetGrid } from './components/AssetGrid'
 import { AssetFilterChips, AssetFilterPopover } from './components/AssetFilters'
 import { AssetInspector } from './components/AssetInspector'
@@ -60,6 +61,7 @@ const EMPTY_FACETS: AssetFacets = {
   durations: [],
   overlayModes: [],
   audioStates: [],
+  ucsCategories: [],
   formats: [],
   codecs: [],
   statuses: [],
@@ -106,6 +108,7 @@ function App(): JSX.Element {
   const [totalCount, setTotalCount] = useState(0)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [exactSearch, setExactSearch] = useState(false)
   const [filters, setFilters] = useState<AssetFilterSelection>(emptyAssetFilters)
   const [facets, setFacets] = useState<AssetFacets>(EMPTY_FACETS)
   const [scope, setScope] = useState<AssetLibraryScope>({ type: 'all' })
@@ -127,9 +130,10 @@ function App(): JSX.Element {
   const kind: AssetKind | 'all' = filters.kinds.length === 1 ? filters.kinds[0] : 'all'
 
   const currentSmartCollectionCriteria = useMemo<AssetSmartCollectionCriteria>(
-    () => ({ search, filters, scope, sort }),
-    [filters, scope, search, sort]
+    () => ({ search, exactSearch, filters, scope, sort }),
+    [exactSearch, filters, scope, search, sort]
   )
+  const relatedSearch = useMemo(() => expandSfxSearch(search), [search])
 
   const showTransientStatus = useCallback((message: string): void => {
     if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
@@ -149,12 +153,13 @@ function App(): JSX.Element {
   const query = useMemo<AssetQuery>(
     () => ({
       search: debouncedSearch || undefined,
+      exactSearch,
       ...assetFiltersToQuery(filters),
       ...scopeFilters(scope),
       sort,
       limit: 200
     }),
-    [debouncedSearch, filters, scope, sort]
+    [debouncedSearch, exactSearch, filters, scope, sort]
   )
 
   const selectedAssets = useMemo(
@@ -335,12 +340,14 @@ function App(): JSX.Element {
   const clearEmptyFilters = useCallback((): void => {
     setSearch('')
     setDebouncedSearch('')
+    setExactSearch(false)
     clearFilters()
   }, [clearFilters])
 
   const selectSmartCollection = useCallback((collection: AssetSmartCollectionSummary): void => {
     setSearch(collection.criteria.search)
     setDebouncedSearch(collection.criteria.search)
+    setExactSearch(collection.criteria.exactSearch)
     setFilters(collection.criteria.filters)
     setScope(collection.criteria.scope)
     setSort(collection.criteria.sort)
@@ -553,19 +560,37 @@ function App(): JSX.Element {
 
       <section className="asset-library">
         <header className="asset-toolbar">
-          <label className="asset-search">
-            <Search size={18} />
-            <input
-              ref={searchRef}
-              value={search}
-              onChange={(event) => {
-                setActiveSmartCollectionId(null)
-                setSearch(event.target.value)
-              }}
-              placeholder={t('toolbar.search')}
-            />
-            <kbd>/</kbd>
-          </label>
+          <div className="asset-search-control">
+            <label className="asset-search">
+              <Search size={18} />
+              <input
+                ref={searchRef}
+                value={search}
+                onChange={(event) => {
+                  setActiveSmartCollectionId(null)
+                  setSearch(event.target.value)
+                }}
+                placeholder={t('toolbar.search')}
+              />
+              <kbd>/</kbd>
+            </label>
+            {relatedSearch.expanded ? (
+              <button
+                type="button"
+                className={`search-mode ${exactSearch ? '' : 'active'}`}
+                aria-pressed={!exactSearch}
+                title={t('toolbar.relatedTerms', {
+                  terms: relatedSearch.relatedTerms.slice(0, 5).join(', ')
+                })}
+                onClick={() => {
+                  setActiveSmartCollectionId(null)
+                  setExactSearch((current) => !current)
+                }}
+              >
+                {exactSearch ? t('toolbar.exact') : t('toolbar.related')}
+              </button>
+            ) : null}
+          </div>
           <nav className="kind-tabs">
             {(['all', 'transition', 'overlay', 'sound'] as const).map((value) => (
               <button
