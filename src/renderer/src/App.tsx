@@ -9,7 +9,15 @@ import {
   type MouseEvent
 } from 'react'
 import { Grid2X2, PanelTopOpen, RefreshCw, Search } from 'lucide-react'
+import {
+  assetFiltersToQuery,
+  emptyAssetFilters,
+  toggleAssetFilter
+} from '../../shared/assetFilters'
 import type {
+  AssetFacets,
+  AssetFilterField,
+  AssetFilterSelection,
   AssetJobEvent,
   AssetKind,
   AssetNavigationSnapshot,
@@ -22,6 +30,7 @@ import type {
   ClipdockResult
 } from '../../shared/clipdock'
 import { AssetGrid } from './components/AssetGrid'
+import { AssetFilterChips, AssetFilterPopover } from './components/AssetFilters'
 import { AssetInspector } from './components/AssetInspector'
 import { AssetSidebar } from './components/AssetSidebar'
 import { QuickLook } from './components/QuickLook'
@@ -35,6 +44,20 @@ const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
   favoriteCount: 0,
   usedAssetCount: 0,
   pendingPreviewCount: 0
+}
+
+const EMPTY_FACETS: AssetFacets = {
+  kinds: [],
+  packs: [],
+  categories: [],
+  aspects: [],
+  durations: [],
+  overlayModes: [],
+  audioStates: [],
+  formats: [],
+  codecs: [],
+  statuses: [],
+  previewStatuses: []
 }
 
 type LibraryScope =
@@ -79,7 +102,8 @@ function App(): JSX.Element {
   const [totalCount, setTotalCount] = useState(0)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [kind, setKind] = useState<AssetKind | 'all'>('all')
+  const [filters, setFilters] = useState<AssetFilterSelection>(emptyAssetFilters)
+  const [facets, setFacets] = useState<AssetFacets>(EMPTY_FACETS)
   const [scope, setScope] = useState<LibraryScope>({ type: 'all' })
   const [sort, setSort] = useState<AssetSortMode>('name')
   const [density, setDensity] = useState(1)
@@ -94,16 +118,17 @@ function App(): JSX.Element {
   const lastSelectedIndex = useRef<number | null>(null)
   const nextCursorRef = useRef<string | null>(null)
   const assetRequestRef = useRef(0)
+  const kind: AssetKind | 'all' = filters.kinds.length === 1 ? filters.kinds[0] : 'all'
 
   const query = useMemo<AssetQuery>(
     () => ({
       search: debouncedSearch || undefined,
-      kinds: kind === 'all' ? undefined : [kind],
+      ...assetFiltersToQuery(filters),
       ...scopeFilters(scope),
       sort,
       limit: 200
     }),
-    [debouncedSearch, kind, scope, sort]
+    [debouncedSearch, filters, scope, sort]
   )
 
   const selectedAssets = useMemo(
@@ -135,6 +160,7 @@ function App(): JSX.Element {
       setNextCursor(result.value.nextCursor)
       nextCursorRef.current = result.value.nextCursor
       setTotalCount(result.value.totalCount)
+      if (!append) setFacets(result.value.facets)
       if (!append) {
         if (resetSelection) {
           setSelectedIds(new Set())
@@ -262,6 +288,12 @@ function App(): JSX.Element {
     void mutate((bridge) => bridge.updateAssets(request))
   }
 
+  const toggleFilter = useCallback((field: AssetFilterField, value: string): void => {
+    setFilters((current) => toggleAssetFilter(current, field, value))
+  }, [])
+
+  const clearFilters = useCallback((): void => setFilters(emptyAssetFilters()), [])
+
   const setAssetTrim = useCallback(
     async (request: AssetTrimRequest): Promise<ClipdockResult<void>> => {
       const resetting =
@@ -382,7 +414,10 @@ function App(): JSX.Element {
           setScope({ type: 'recent' })
           setSort('last-used')
         }}
-        onSelectPack={(id) => setScope({ type: 'pack', id })}
+        onSelectPack={(id) => {
+          setFilters((current) => ({ ...current, packIds: [] }))
+          setScope({ type: 'pack', id })
+        }}
         onSelectCollection={(id) => setScope({ type: 'collection', id })}
         onSelectTag={(name) => setScope({ type: 'tag', name })}
         onAddPack={() => void addPack()}
@@ -423,7 +458,12 @@ function App(): JSX.Element {
                 type="button"
                 key={value}
                 className={kind === value ? 'active' : ''}
-                onClick={() => setKind(value)}
+                onClick={() =>
+                  setFilters((current) => ({
+                    ...current,
+                    kinds: value === 'all' ? [] : [value]
+                  }))
+                }
               >
                 {value === 'all'
                   ? t('toolbar.all')
@@ -436,6 +476,12 @@ function App(): JSX.Element {
             ))}
           </nav>
           <div className="toolbar-actions">
+            <AssetFilterPopover
+              facets={facets}
+              filters={filters}
+              onToggle={toggleFilter}
+              onClear={clearFilters}
+            />
             <select
               value={sort}
               onChange={(event) => setSort(event.target.value as AssetSortMode)}
@@ -477,6 +523,13 @@ function App(): JSX.Element {
             </button>
           </div>
         </header>
+
+        <AssetFilterChips
+          facets={facets}
+          filters={filters}
+          onToggle={toggleFilter}
+          onClear={clearFilters}
+        />
 
         {inspectorOpen ? (
           <AssetInspector

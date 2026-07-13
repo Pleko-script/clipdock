@@ -47,6 +47,7 @@ Both families are bundled locally. The UI never requires a network connection.
 
 - Sidebar: 214 px.
 - Toolbar: 56 px.
+- Filters: temporary toolbar popover; active values become removable chips and never reserve permanent grid width.
 - Results bar: 31 px.
 - Video editor: centered above the asset results and collapsible, without an internal scroll container.
 - Editor columns: Organize on the left, media/range in the center, and file details on the right.
@@ -101,6 +102,8 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 ## Interaction contract
 
 - `/` focuses search; search is debounced by 150 ms.
+- Facet values use OR within one group and AND across groups; every visible option carries its current result count.
+- Active filters remain visible as removable chips with one explicit **Clear all** action.
 - Arrow keys move the active asset.
 - `Space` opens Quick Look; `Esc` closes it and stops playback.
 - `F` toggles favorite.

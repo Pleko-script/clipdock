@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import test, { after } from 'node:test'
 
 const projectRoot = process.cwd()
@@ -19,6 +20,7 @@ const trim = read('src/main/assetTrim.ts')
 const preload = read('src/preload/index.ts')
 const app = read('src/renderer/src/App.tsx')
 const grid = read('src/renderer/src/components/AssetGrid.tsx')
+const filterUi = read('src/renderer/src/components/AssetFilters.tsx')
 const inspector = read('src/renderer/src/components/AssetInspector.tsx')
 const trimEditor = read('src/renderer/src/components/AssetTrimEditor.tsx')
 const i18n = read('src/renderer/src/i18n.tsx')
@@ -61,6 +63,7 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetClassification.ts'),
         join(projectRoot, 'src/main/assetIpcValidation.ts'),
         join(projectRoot, 'src/main/assetPreview.ts'),
+        join(projectRoot, 'src/main/assetQuery.ts'),
         join(projectRoot, 'src/main/assetTrim.ts'),
         join(projectRoot, 'src/main/assetTrimStore.ts'),
         join(projectRoot, 'src/main/assetScanner.ts'),
@@ -69,7 +72,8 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetStore.ts'),
         join(projectRoot, 'src/main/mediaProbe.ts'),
         join(projectRoot, 'src/main/mediaProcess.ts'),
-        join(projectRoot, 'src/shared/clipdock.ts')
+        join(projectRoot, 'src/shared/clipdock.ts'),
+        join(projectRoot, 'src/shared/assetFilters.ts')
       ]
     })
   )
@@ -81,6 +85,7 @@ function compileRuntimeModules() {
   const requireCompiled = createRequire(join(outDir, 'src/main/assetStore.js'))
   return {
     scratchRoot,
+    filters: requireCompiled(join(outDir, 'src/shared/assetFilters.js')),
     classification: requireCompiled(join(outDir, 'src/main/assetClassification.js')),
     validation: requireCompiled(join(outDir, 'src/main/assetIpcValidation.js')),
     preview: requireCompiled(join(outDir, 'src/main/assetPreview.js')),
@@ -198,6 +203,35 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
   assert.equal(usageQuery.usedOnly, true)
   assert.equal(usageQuery.sort, 'most-used')
 
+  const facetQuery = runtime.validation.parseAssetQuery({
+    categoryPaths: ['Overlays/Dust', 42],
+    aspects: ['portrait', 'hacked'],
+    durationBuckets: ['under-1s', 'DROP TABLE assets'],
+    overlayModes: ['alpha', 'invalid'],
+    audioStates: ['with-audio', 'invalid'],
+    codecs: ['H264', '', 42],
+    statuses: ['missing', 'removed'],
+    previewStatuses: ['failed', 'running']
+  })
+  assert.deepEqual(facetQuery.categoryPaths, ['Overlays/Dust'])
+  assert.deepEqual(facetQuery.aspects, ['portrait'])
+  assert.deepEqual(facetQuery.durationBuckets, ['under-1s'])
+  assert.deepEqual(facetQuery.overlayModes, ['alpha'])
+  assert.deepEqual(facetQuery.audioStates, ['with-audio'])
+  assert.deepEqual(facetQuery.codecs, ['h264'])
+  assert.deepEqual(facetQuery.statuses, ['missing'])
+  assert.deepEqual(facetQuery.previewStatuses, ['failed'])
+
+  const emptyFilters = runtime.filters.emptyAssetFilters()
+  const withKind = runtime.filters.toggleAssetFilter(emptyFilters, 'kinds', 'overlay')
+  const combined = runtime.filters.toggleAssetFilter(withKind, 'formats', '.mov')
+  const removed = runtime.filters.toggleAssetFilter(combined, 'kinds', 'overlay')
+  const restored = runtime.filters.toggleAssetFilter(removed, 'kinds', 'overlay')
+  assert.equal(runtime.filters.countAssetFilters(combined), 2)
+  assert.deepEqual(runtime.filters.assetFiltersToQuery(removed), { formats: ['.mov'] })
+  assert.deepEqual(restored, combined)
+  assert.deepEqual(runtime.filters.emptyAssetFilters(), emptyFilters)
+
   const update = runtime.validation.parseAssetUpdate({
     assetIds: ['a', 'a', '', 42],
     kind: 'malware',
@@ -314,6 +348,31 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     })
     assert.equal(secondAsset.ok, true, secondAsset.error?.message)
 
+    const faceted = store.queryAssets({
+      kinds: ['unknown', 'transition'],
+      aspects: ['landscape'],
+      durationBuckets: ['under-1s', '1-3s'],
+      codecs: ['h264']
+    })
+    assert.equal(faceted.ok, true, faceted.error?.message)
+    assert.equal(faceted.value.totalCount, 2)
+    assert.deepEqual(
+      faceted.value.facets.kinds.map(({ value, count }) => [value, count]),
+      [
+        ['transition', 1],
+        ['unknown', 1]
+      ]
+    )
+    assert.deepEqual(
+      faceted.value.facets.packs.map(({ label, count }) => [label, count]),
+      [['Legacy Pack', 2]]
+    )
+    assert.deepEqual(
+      faceted.value.facets.categories.map(({ value, count }) => [value, count]),
+      [['', 2]]
+    )
+    assert.deepEqual(store.queryAssets({ aspects: ['portrait'] }).value.items, [])
+
     clock = 300
     assert.equal(store.recordAssetUsage(['clip-1']).ok, true)
     clock = 400
@@ -376,6 +435,107 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(store.getAsset('clip-1').value.rotationDegrees, 90)
     assert.equal(store.getAsset('clip-1').value.trimStatus, 'pending')
     assert.equal(store.clearTrim('clip-1').ok, true)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      /* preserve assertions */
+    }
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('faceted first-page query stays responsive with 10,000 assets', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-facet-performance-'))
+  const packRoot = join(workspace, 'Synthetic Pack')
+  const databaseFile = join(workspace, 'library.sqlite')
+  let store
+  try {
+    mkdirSync(packRoot, { recursive: true })
+    store = runtime.store.openAssetStore({
+      databaseFile,
+      previewCacheDir: join(workspace, 'previews'),
+      createId: createIdGenerator('facet')
+    }).value
+    const packId = store.createPack(packRoot).value
+    store.close()
+    store = null
+
+    const database = new DatabaseSync(databaseFile)
+    const insert = database.prepare(`
+      INSERT INTO assets (
+        id, pack_id, relative_path, category_path, display_name, file_path,
+        normalized_file_path, extension, kind, media_type, overlay_mode,
+        size_bytes, modified_at_ms, duration_ms, width_pixels, height_pixels, fps,
+        codec, audio_codec, sample_rate, channels, has_alpha, created_at_ms, updated_at_ms
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `)
+    const kinds = ['transition', 'overlay', 'sound', 'unknown']
+    const durations = [500, 2000, 5000, 12000]
+    database.exec('BEGIN IMMEDIATE')
+    for (let index = 0; index < 10_000; index += 1) {
+      const kind = kinds[index % kinds.length]
+      const audio = kind === 'sound'
+      const orientation = index % 3
+      const width = audio ? null : orientation === 0 ? 1080 : orientation === 1 ? 1920 : 1080
+      const height = audio ? null : orientation === 0 ? 1920 : orientation === 1 ? 1080 : 1080
+      const extension = audio ? '.wav' : index % 2 ? '.mp4' : '.mov'
+      const relativePath = `Category ${index % 12}/asset-${index}${extension}`
+      const filePath = join(packRoot, relativePath)
+      insert.run(
+        `asset-${index}`,
+        packId,
+        relativePath,
+        `Category ${index % 12}`,
+        `asset-${index}`,
+        filePath,
+        filePath.toLocaleLowerCase('en-US'),
+        extension,
+        kind,
+        audio ? 'audio' : 'video',
+        kind === 'overlay' ? (index % 2 ? 'screen' : 'alpha') : 'raw',
+        1000 + index,
+        index,
+        durations[Math.floor(index / kinds.length) % durations.length],
+        width,
+        height,
+        audio ? null : 30,
+        audio ? null : index % 2 ? 'h264' : 'prores',
+        audio ? 'pcm_s16le' : null,
+        audio ? 48000 : null,
+        audio ? 2 : null,
+        kind === 'overlay' && index % 2 === 0 ? 1 : 0,
+        index,
+        index
+      )
+    }
+    database.exec('COMMIT')
+    database.close()
+
+    store = runtime.store.openAssetStore({
+      databaseFile,
+      previewCacheDir: join(workspace, 'previews')
+    }).value
+    const started = performance.now()
+    const result = store.queryAssets({
+      limit: 200,
+      kinds: ['transition', 'overlay'],
+      aspects: ['portrait', 'landscape'],
+      durationBuckets: ['under-1s', '1-3s'],
+      formats: ['.mp4', '.mov'],
+      codecs: ['h264', 'prores'],
+      statuses: ['ready'],
+      previewStatuses: ['pending']
+    })
+    const elapsed = performance.now() - started
+    assert.equal(result.ok, true, result.error?.message)
+    assert.equal(result.value.items.length, 200)
+    assert.ok(result.value.totalCount > 200)
+    assert.equal(result.value.nextCursor, '200')
+    assert.ok(result.value.facets.packs[0].count > 0)
+    assert.ok(result.value.facets.aspects.some((option) => option.value === 'square'))
+    assert.ok(result.value.facets.kinds.some((option) => option.value === 'unknown'))
+    assert.ok(elapsed < 100, `First faceted page took ${elapsed.toFixed(1)} ms`)
   } finally {
     try {
       store?.close()
@@ -475,6 +635,19 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     const sound = assets.find((asset) => asset.kind === 'sound')
     assert.equal(alphaOverlay.hasAlpha, true)
     assert.equal(alphaOverlay.overlayMode, 'alpha')
+    assert.deepEqual(
+      store.queryAssets({ overlayModes: ['alpha'] }).value.items.map((asset) => asset.id),
+      [alphaOverlay.id]
+    )
+    assert.deepEqual(
+      store.queryAssets({ audioStates: ['with-audio'] }).value.items.map((asset) => asset.id),
+      [sound.id]
+    )
+    assert.equal(store.queryAssets({ formats: ['.mov', '.wav'] }).value.totalCount, 2)
+    assert.equal(
+      store.queryAssets({ statuses: ['ready'], previewStatuses: ['pending'] }).value.totalCount,
+      3
+    )
     const transitionPreview = await runtime.preview.generateAssetPreview(transition, previewDir)
     const soundPreview = await runtime.preview.generateAssetPreview(sound, previewDir)
     assert.match(transitionPreview.thumbnailPath, /\.webp$/)
@@ -544,7 +717,9 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
 })
 
 test('renderer is virtualized, scoped, and contains no privileged imports', () => {
-  const renderer = [app, grid, read('src/renderer/src/components/AssetSidebar.tsx')].join('\n')
+  const renderer = [app, grid, filterUi, read('src/renderer/src/components/AssetSidebar.tsx')].join(
+    '\n'
+  )
   assert.doesNotMatch(renderer, /from ['"`]electron['"`]|from ['"`]node:|ipcRenderer/)
   assert.match(grid, /useVirtualizer/)
   assert.match(app, /type LibraryScope/)
@@ -569,7 +744,10 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(app, /value="last-used"/)
   assert.match(app, /value="most-used"/)
   assert.match(renderer, /sidebar\.recentlyUsed/)
-  assert.doesNotMatch(app, /title="Filters"/)
+  assert.match(filterUi, /asset-filter-popover/)
+  assert.match(filterUi, /asset-filter-chips/)
+  assert.match(filterUi, /filter\.clearAll/)
+  assert.match(filterUi, /type="checkbox"/)
 })
 
 test('package, docs, and preview pipeline describe the shipped system', () => {

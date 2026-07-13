@@ -39,6 +39,9 @@ export type CompatibilityLevel = 'verified' | 'expected' | 'unsupported'
 export type AssetSortMode = 'name' | 'modified' | 'duration' | 'last-used' | 'most-used'
 export type AssetStatus = 'ready' | 'missing' | 'error'
 export type PreviewStatus = 'pending' | 'ready' | 'failed'
+export type AssetAspect = 'landscape' | 'portrait' | 'square' | 'unknown'
+export type AssetDurationBucket = 'under-1s' | '1-3s' | '3-10s' | 'over-10s' | 'unknown'
+export type AssetAudioState = 'with-audio' | 'silent'
 export type TrimStatus = 'none' | 'pending' | 'ready' | 'failed'
 export type VideoRotation = 0 | 90 | 180 | 270
 
@@ -110,18 +113,63 @@ export interface AssetQuery {
   search?: string
   kinds?: AssetKind[]
   packIds?: string[]
+  categoryPaths?: string[]
+  aspects?: AssetAspect[]
+  durationBuckets?: AssetDurationBucket[]
+  overlayModes?: OverlayMode[]
+  audioStates?: AssetAudioState[]
   collectionIds?: string[]
   tags?: string[]
   favoriteOnly?: boolean
   usedOnly?: boolean
   formats?: string[]
+  codecs?: string[]
+  statuses?: AssetStatus[]
+  previewStatuses?: PreviewStatus[]
   sort?: AssetSortMode
+}
+
+export interface AssetFilterSelection {
+  kinds: AssetKind[]
+  packIds: string[]
+  categoryPaths: string[]
+  aspects: AssetAspect[]
+  durationBuckets: AssetDurationBucket[]
+  overlayModes: OverlayMode[]
+  audioStates: AssetAudioState[]
+  formats: string[]
+  codecs: string[]
+  statuses: AssetStatus[]
+  previewStatuses: PreviewStatus[]
+}
+
+export type AssetFilterField = keyof AssetFilterSelection
+
+export interface AssetFacetOption {
+  value: string
+  label?: string
+  count: number
+}
+
+export interface AssetFacets {
+  kinds: AssetFacetOption[]
+  packs: AssetFacetOption[]
+  categories: AssetFacetOption[]
+  aspects: AssetFacetOption[]
+  durations: AssetFacetOption[]
+  overlayModes: AssetFacetOption[]
+  audioStates: AssetFacetOption[]
+  formats: AssetFacetOption[]
+  codecs: AssetFacetOption[]
+  statuses: AssetFacetOption[]
+  previewStatuses: AssetFacetOption[]
 }
 
 export interface AssetPage {
   items: AssetSummary[]
   nextCursor: string | null
   totalCount: number
+  facets: AssetFacets
 }
 
 export interface AssetNavigationSnapshot {

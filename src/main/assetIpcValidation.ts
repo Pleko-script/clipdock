@@ -1,17 +1,33 @@
 import {
   SUPPORTED_AUDIO_EXTENSIONS,
   SUPPORTED_VIDEO_EXTENSIONS,
+  type AssetAspect,
+  type AssetAudioState,
   type AssetDragRequest,
+  type AssetDurationBucket,
   type AssetKind,
   type AssetQuery,
   type AssetSortMode,
+  type AssetStatus,
   type AssetTrimRequest,
   type AssetUpdateRequest,
-  type OverlayMode
+  type OverlayMode,
+  type PreviewStatus
 } from '../shared/clipdock'
 
 const KINDS = new Set<AssetKind>(['transition', 'overlay', 'sound', 'unknown'])
 const OVERLAY_MODES = new Set<OverlayMode>(['alpha', 'screen', 'raw'])
+const ASPECTS = new Set<AssetAspect>(['landscape', 'portrait', 'square', 'unknown'])
+const DURATION_BUCKETS = new Set<AssetDurationBucket>([
+  'under-1s',
+  '1-3s',
+  '3-10s',
+  'over-10s',
+  'unknown'
+])
+const AUDIO_STATES = new Set<AssetAudioState>(['with-audio', 'silent'])
+const ASSET_STATUSES = new Set<AssetStatus>(['ready', 'missing', 'error'])
+const PREVIEW_STATUSES = new Set<PreviewStatus>(['pending', 'ready', 'failed'])
 const SORT_MODES = new Set<AssetSortMode>([
   'name',
   'modified',
@@ -37,6 +53,10 @@ function strings(value: unknown, limit: number, length: number): string[] {
   ].slice(0, limit)
 }
 
+function enumStrings<T extends string>(value: unknown, allowed: ReadonlySet<T>, length = 32): T[] {
+  return strings(value, allowed.size, length).filter((item): item is T => allowed.has(item as T))
+}
+
 export function validAssetIds(value: unknown, limit = 256): string[] {
   return strings(value, limit, 128)
 }
@@ -51,9 +71,7 @@ export function validLabel(value: unknown, limit = 80): string {
 
 export function parseAssetQuery(value: unknown): AssetQuery {
   const input = record(value)
-  const kinds = strings(input.kinds, KINDS.size, 16).filter((kind): kind is AssetKind =>
-    KINDS.has(kind as AssetKind)
-  )
+  const kinds = enumStrings(input.kinds, KINDS, 16)
   const formats = strings(input.formats, FORMATS.size, 10)
     .map((format) => (format.startsWith('.') ? format : `.${format}`).toLowerCase())
     .filter((format) => FORMATS.has(format))
@@ -69,11 +87,19 @@ export function parseAssetQuery(value: unknown): AssetQuery {
     search: typeof input.search === 'string' ? input.search.trim().slice(0, 256) : undefined,
     kinds: kinds.length ? kinds : undefined,
     packIds: validAssetIds(input.packIds, 64),
+    categoryPaths: strings(input.categoryPaths, 128, 512),
+    aspects: enumStrings(input.aspects, ASPECTS),
+    durationBuckets: enumStrings(input.durationBuckets, DURATION_BUCKETS),
+    overlayModes: enumStrings(input.overlayModes, OVERLAY_MODES),
+    audioStates: enumStrings(input.audioStates, AUDIO_STATES),
     collectionIds: validAssetIds(input.collectionIds, 64),
     tags: strings(input.tags, 32, 64),
     favoriteOnly: input.favoriteOnly === true,
     usedOnly: input.usedOnly === true,
     formats: formats.length ? formats : undefined,
+    codecs: strings(input.codecs, 64, 64).map((codec) => codec.toLocaleLowerCase('en-US')),
+    statuses: enumStrings(input.statuses, ASSET_STATUSES),
+    previewStatuses: enumStrings(input.previewStatuses, PREVIEW_STATUSES),
     sort
   }
 }

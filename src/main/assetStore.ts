@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { hasAssetSearchIndex, refreshAssetSearch } from './assetSearch'
+import { refreshAssetSearch } from './assetSearch'
+import { buildAssetWhere, queryAssetFacets } from './assetQuery'
 import { ASSET_SCHEMA_VERSION, migrateAssetSchema, normalizeAssetPath } from './assetSchema'
 import {
   beginAssetTrim,
@@ -452,49 +453,7 @@ class SqliteAssetStore implements AssetStore {
 
   queryAssets(query: AssetQuery): ClipdockResult<AssetPage> {
     try {
-      const where: string[] = []
-      const params: Array<string | number> = []
-      const addIn = (column: string, values: string[] | undefined): void => {
-        if (!values?.length) return
-        where.push(`${column} IN (${values.map(() => '?').join(',')})`)
-        params.push(...values)
-      }
-      addIn('a.kind', query.kinds)
-      addIn('a.pack_id', query.packIds)
-      addIn(
-        'a.extension',
-        query.formats?.map((value) => value.toLowerCase())
-      )
-      if (query.favoriteOnly) where.push('a.favorite = 1')
-      if (query.usedOnly) where.push('a.last_used_at_ms IS NOT NULL')
-      if (query.collectionIds?.length) {
-        where.push(
-          `EXISTS (SELECT 1 FROM collection_assets ca WHERE ca.asset_id=a.id AND ca.collection_id IN (${query.collectionIds.map(() => '?').join(',')}))`
-        )
-        params.push(...query.collectionIds)
-      }
-      if (query.tags?.length) {
-        where.push(
-          `EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id=a.id AND t.normalized_name IN (${query.tags.map(() => '?').join(',')}))`
-        )
-        params.push(...query.tags.map((tag) => normalizeTag(tag).toLocaleLowerCase('en-US')))
-      }
-      const search = query.search?.trim().toLocaleLowerCase('en-US')
-      if (search) {
-        const hasFts = hasAssetSearchIndex(this.database)
-        const ftsTerms = search.match(/[\p{L}\p{N}_-]+/gu) ?? []
-        if (hasFts && ftsTerms.length) {
-          where.push(`a.id IN (SELECT asset_id FROM asset_search WHERE asset_search MATCH ?)`)
-          params.push(ftsTerms.map((term) => `"${term.replaceAll('"', '""')}"*`).join(' AND '))
-        } else {
-          where.push(
-            `(LOWER(a.display_name) LIKE ? OR LOWER(a.relative_path) LIKE ? OR LOWER(p.name) LIKE ? OR LOWER(a.note) LIKE ? OR EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id=a.id AND LOWER(t.name) LIKE ?))`
-          )
-          const term = `%${search}%`
-          params.push(term, term, term, term, term)
-        }
-      }
-      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+      const { whereSql, params } = buildAssetWhere(this.database, query)
       const sort = query.sort ?? 'name'
       const order =
         sort === 'modified'
@@ -522,7 +481,8 @@ class SqliteAssetStore implements AssetStore {
       return ok({
         items: this.assetSummaries(rows),
         nextCursor: offset + rows.length < totalCount ? String(offset + rows.length) : null,
-        totalCount
+        totalCount,
+        facets: queryAssetFacets(this.database, query)
       })
     } catch (error) {
       return fail(error instanceof Error ? error.message : 'Asset query failed.')
