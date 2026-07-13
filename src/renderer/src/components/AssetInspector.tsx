@@ -1,5 +1,13 @@
-import { useState, type JSX } from 'react'
-import { FolderSearch, RefreshCw, X } from 'lucide-react'
+import { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
+import {
+  FolderSearch,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  RefreshCw,
+  X
+} from 'lucide-react'
 import type {
   AssetKind,
   AssetPosterRequest,
@@ -9,8 +17,17 @@ import type {
   ClipdockResult,
   OverlayMode
 } from '../../../shared/clipdock'
+import {
+  EDITOR_PANEL_COLLAPSED_WIDTH,
+  EDITOR_PANEL_STORAGE_KEY,
+  parseEditorPanelLayout,
+  responsivePanelCollapse,
+  type EditorPanelLayout,
+  type EditorPanelSide
+} from '../editorPanelLayout'
 import { useI18n } from '../i18n'
 import { AssetTrimEditor } from './AssetTrimEditor'
+import { PanelResizeHandle } from './PanelResizeHandle'
 
 function bytes(value: number): string {
   const units = ['B', 'KB', 'MB', 'GB']
@@ -44,6 +61,23 @@ export function AssetInspector({
   const primary = assets[0]
   const [tags, setTags] = useState(primary?.tags.join(', ') ?? '')
   const [tagsDirty, setTagsDirty] = useState(false)
+  const [panelLayout, setPanelLayout] = useState(() =>
+    parseEditorPanelLayout(window.localStorage.getItem(EDITOR_PANEL_STORAGE_KEY))
+  )
+  const [editorWidth, setEditorWidth] = useState(1200)
+  const editorLayoutRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    window.localStorage.setItem(EDITOR_PANEL_STORAGE_KEY, JSON.stringify(panelLayout))
+  }, [panelLayout])
+
+  useEffect(() => {
+    const element = editorLayoutRef.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setEditorWidth(entry.contentRect.width))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [primary?.id])
 
   if (!primary)
     return (
@@ -57,6 +91,29 @@ export function AssetInspector({
     )
 
   const ids = assets.map((asset) => asset.id)
+  const responsiveCollapse = responsivePanelCollapse(editorWidth)
+  const organizeCollapsed = panelLayout.organizeCollapsed || responsiveCollapse.organize
+  const detailsCollapsed = panelLayout.detailsCollapsed || responsiveCollapse.details
+  const panelStyle = {
+    '--organize-panel-width': `${organizeCollapsed ? EDITOR_PANEL_COLLAPSED_WIDTH : panelLayout.organizeWidth}px`,
+    '--details-panel-width': `${detailsCollapsed ? EDITOR_PANEL_COLLAPSED_WIDTH : panelLayout.detailsWidth}px`,
+    '--organize-resizer-width': organizeCollapsed ? '0px' : '10px',
+    '--details-resizer-width': detailsCollapsed ? '0px' : '10px'
+  } as CSSProperties
+
+  const setPanelWidth = (side: EditorPanelSide, width: number): void => {
+    setPanelLayout((current) => ({
+      ...current,
+      [side === 'organize' ? 'organizeWidth' : 'detailsWidth']: width
+    }))
+  }
+
+  const togglePanel = (side: EditorPanelSide): void => {
+    const key: keyof Pick<EditorPanelLayout, 'organizeCollapsed' | 'detailsCollapsed'> =
+      side === 'organize' ? 'organizeCollapsed' : 'detailsCollapsed'
+    setPanelLayout((current) => ({ ...current, [key]: !current[key] }))
+  }
+
   return (
     <aside className="asset-inspector">
       <header>
@@ -73,69 +130,101 @@ export function AssetInspector({
         </button>
       </header>
 
-      <div className="asset-editor-layout">
-        <section className="inspector-side-panel inspector-organize">
-          <h3>{t('inspector.organize')}</h3>
-          <label>
-            {t('inspector.assetType')}
-            <select
-              value={assets.every((asset) => asset.kind === primary.kind) ? primary.kind : ''}
-              onChange={(event) =>
-                event.target.value &&
-                onUpdate({ assetIds: ids, kind: event.target.value as AssetKind })
+      <div ref={editorLayoutRef} className="asset-editor-layout" style={panelStyle}>
+        <section
+          className={`inspector-side-panel inspector-organize${organizeCollapsed ? ' collapsed' : ''}`}
+        >
+          <div className="inspector-panel-header">
+            <h3>{t('inspector.organize')}</h3>
+            <button
+              type="button"
+              aria-label={
+                organizeCollapsed ? t('inspector.expandOrganize') : t('inspector.collapseOrganize')
               }
+              aria-expanded={!organizeCollapsed}
+              aria-controls="inspector-organize-content"
+              disabled={responsiveCollapse.organize}
+              title={responsiveCollapse.organize ? t('inspector.expandWindow') : undefined}
+              onClick={() => togglePanel('organize')}
             >
-              <option value="">{t('inspector.mixed')}</option>
-              <option value="transition">{kind('transition')}</option>
-              <option value="overlay">{kind('overlay')}</option>
-              <option value="sound">{kind('sound')}</option>
-              <option value="unknown">{kind('unknown')}</option>
-            </select>
-          </label>
-          {assets.every((asset) => asset.kind === 'overlay') ? (
-            <label>
-              {t('inspector.overlayMode')}
-              <select
-                value={
-                  assets.every((asset) => asset.overlayMode === primary.overlayMode)
-                    ? primary.overlayMode
-                    : ''
-                }
-                onChange={(event) =>
-                  event.target.value &&
-                  onUpdate({ assetIds: ids, overlayMode: event.target.value as OverlayMode })
-                }
-              >
-                <option value="">{t('inspector.mixed')}</option>
-                <option value="raw">{t('inspector.rawVideo')}</option>
-                <option value="alpha">{t('inspector.alpha')}</option>
-                <option value="screen">{t('inspector.screenAdd')}</option>
-              </select>
-            </label>
+              {organizeCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+            </button>
+          </div>
+          {!organizeCollapsed ? (
+            <div id="inspector-organize-content" className="inspector-panel-content">
+              <label>
+                {t('inspector.assetType')}
+                <select
+                  value={assets.every((asset) => asset.kind === primary.kind) ? primary.kind : ''}
+                  onChange={(event) =>
+                    event.target.value &&
+                    onUpdate({ assetIds: ids, kind: event.target.value as AssetKind })
+                  }
+                >
+                  <option value="">{t('inspector.mixed')}</option>
+                  <option value="transition">{kind('transition')}</option>
+                  <option value="overlay">{kind('overlay')}</option>
+                  <option value="sound">{kind('sound')}</option>
+                  <option value="unknown">{kind('unknown')}</option>
+                </select>
+              </label>
+              {assets.every((asset) => asset.kind === 'overlay') ? (
+                <label>
+                  {t('inspector.overlayMode')}
+                  <select
+                    value={
+                      assets.every((asset) => asset.overlayMode === primary.overlayMode)
+                        ? primary.overlayMode
+                        : ''
+                    }
+                    onChange={(event) =>
+                      event.target.value &&
+                      onUpdate({
+                        assetIds: ids,
+                        overlayMode: event.target.value as OverlayMode
+                      })
+                    }
+                  >
+                    <option value="">{t('inspector.mixed')}</option>
+                    <option value="raw">{t('inspector.rawVideo')}</option>
+                    <option value="alpha">{t('inspector.alpha')}</option>
+                    <option value="screen">{t('inspector.screenAdd')}</option>
+                  </select>
+                </label>
+              ) : null}
+              <label>
+                {t('inspector.tags')}
+                <input
+                  value={tags}
+                  onChange={(event) => {
+                    setTags(event.target.value)
+                    setTagsDirty(true)
+                  }}
+                  onBlur={() => {
+                    if (!tagsDirty) return
+                    setTagsDirty(false)
+                    onUpdate({
+                      assetIds: ids,
+                      tags: tags
+                        .split(',')
+                        .map((tag) => tag.trim())
+                        .filter(Boolean)
+                    })
+                  }}
+                  placeholder={t('inspector.tagsPlaceholder')}
+                />
+              </label>
+            </div>
           ) : null}
-          <label>
-            {t('inspector.tags')}
-            <input
-              value={tags}
-              onChange={(event) => {
-                setTags(event.target.value)
-                setTagsDirty(true)
-              }}
-              onBlur={() => {
-                if (!tagsDirty) return
-                setTagsDirty(false)
-                onUpdate({
-                  assetIds: ids,
-                  tags: tags
-                    .split(',')
-                    .map((tag) => tag.trim())
-                    .filter(Boolean)
-                })
-              }}
-              placeholder={t('inspector.tagsPlaceholder')}
-            />
-          </label>
         </section>
+
+        <PanelResizeHandle
+          side="organize"
+          width={panelLayout.organizeWidth}
+          label={t('inspector.resizeOrganize')}
+          hidden={organizeCollapsed}
+          onResize={(width) => setPanelWidth('organize', width)}
+        />
 
         <div className="asset-editor-primary">
           {assets.length === 1 && (primary.mediaType !== 'video' || !primary.durationMs) ? (
@@ -155,10 +244,35 @@ export function AssetInspector({
           ) : null}
         </div>
 
-        <section className="inspector-side-panel inspector-file-panel">
-          <h3>{t('inspector.fileDetails')}</h3>
-          {assets.length === 1 ? (
-            <>
+        <PanelResizeHandle
+          side="details"
+          width={panelLayout.detailsWidth}
+          label={t('inspector.resizeDetails')}
+          hidden={detailsCollapsed}
+          onResize={(width) => setPanelWidth('details', width)}
+        />
+
+        <section
+          className={`inspector-side-panel inspector-file-panel${detailsCollapsed ? ' collapsed' : ''}`}
+        >
+          <div className="inspector-panel-header">
+            <h3>{t('inspector.fileDetails')}</h3>
+            <button
+              type="button"
+              aria-label={
+                detailsCollapsed ? t('inspector.expandDetails') : t('inspector.collapseDetails')
+              }
+              aria-expanded={!detailsCollapsed}
+              aria-controls="inspector-file-content"
+              disabled={responsiveCollapse.details}
+              title={responsiveCollapse.details ? t('inspector.expandWindow') : undefined}
+              onClick={() => togglePanel('details')}
+            >
+              {detailsCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
+            </button>
+          </div>
+          {!detailsCollapsed && assets.length === 1 ? (
+            <div id="inspector-file-content" className="inspector-panel-content">
               <dl className="asset-facts">
                 <div>
                   <dt>{t('inspector.pack')}</dt>
@@ -208,7 +322,7 @@ export function AssetInspector({
                   {t('inspector.rebuild')}
                 </button>
               </div>
-            </>
+            </div>
           ) : null}
         </section>
       </div>

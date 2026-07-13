@@ -52,6 +52,7 @@ Both families are bundled locally. The UI never requires a network connection.
 - Results bar: 31 px.
 - Video editor: centered above the asset results and collapsible, without an internal scroll container.
 - Editor columns: Organize on the left, media/range in the center, and file details on the right.
+- Editor side panels: 220 px by default, independently resizable from 140 to 320 px, and independently collapsible to 36 px. Widths and collapse choices persist locally. Below 900 px of editor space, File details collapses automatically; below 720 px, both side panels collapse until more space is available.
 - Grid: all remaining space below the editor, row-virtualized with 14 px gaps.
 - Application minimum: 900 × 600 px.
 
@@ -118,6 +119,7 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - Renaming, updating, or deleting a Smart Collection never changes source media or manual Collection membership.
 - Linked packs are watched after startup, add, and relink. File bursts are debounced before affected paths are reconciled through the normal scan status model.
 - A disconnected root keeps its pack and asset metadata unchanged. Reconnect performs one recovery scan; manual rescan remains available.
+- Editor resize separators support Left/Right Arrow (8 px), Shift+Arrow (24 px), Home (140 px), and End (320 px). Collapse buttons and separators retain a visible keyboard focus outline.
 
 ## Anti-slop guardrails
 

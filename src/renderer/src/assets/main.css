@@ -756,7 +756,7 @@
   background: var(--layer-0);
 }
 .asset-inspector > * {
-  width: min(1360px, 100%);
+  width: min(1520px, 100%);
   margin-right: auto;
   margin-left: auto;
 }
@@ -817,35 +817,116 @@
 }
 .asset-editor-layout {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(300px, 620px) minmax(140px, 220px);
+  grid-template-columns:
+    var(--organize-panel-width, 220px) var(--organize-resizer-width, 10px)
+    minmax(300px, 1fr) var(--details-resizer-width, 10px) var(--details-panel-width, 220px);
   align-items: start;
-  justify-content: center;
-  gap: clamp(8px, 1.6vw, 28px);
+  gap: 0;
 }
 .asset-editor-primary {
   min-width: 0;
+  padding: 0 clamp(8px, 1.3vw, 20px);
 }
 .inspector-side-panel {
   min-width: 0;
   padding-top: 2px;
 }
-.inspector-side-panel h3 {
-  margin: 0 0 14px;
+.inspector-panel-header {
+  display: flex;
+  min-height: 28px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.inspector-panel-header h3 {
+  overflow: hidden;
+  margin: 5px 0 0;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-panel-header button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border-radius: 3px;
+  color: var(--text-tertiary);
+  background: transparent;
+}
+.inspector-panel-header button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--layer-hover);
+}
+.inspector-panel-header button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.inspector-side-panel.collapsed .inspector-panel-header {
+  justify-content: center;
+}
+.inspector-side-panel.collapsed .inspector-panel-header h3 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.inspector-panel-content {
+  min-width: 0;
 }
 .inspector-organize {
+  padding-right: 4px;
+}
+.inspector-file-panel {
+  padding-left: 4px;
+}
+.inspector-organize .inspector-panel-content {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-.inspector-organize > label {
+.inspector-organize .inspector-panel-content > label {
   display: flex;
   flex-direction: column;
   gap: 7px;
   color: var(--text-tertiary);
   font-size: 11px;
+}
+.panel-resize-handle {
+  position: relative;
+  width: 10px;
+  min-height: 180px;
+  align-self: stretch;
+  padding: 0;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.panel-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--line);
+  content: '';
+}
+.panel-resize-handle:hover::after,
+.panel-resize-handle:focus-visible::after {
+  width: 2px;
+  background: var(--text-secondary);
+}
+.panel-resize-handle:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 .asset-inspector input,
 .asset-inspector select {

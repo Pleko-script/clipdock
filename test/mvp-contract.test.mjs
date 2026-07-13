@@ -34,6 +34,7 @@ const grid = read('src/renderer/src/components/AssetGrid.tsx')
 const filterUi = read('src/renderer/src/components/AssetFilters.tsx')
 const inspector = read('src/renderer/src/components/AssetInspector.tsx')
 const trimEditor = read('src/renderer/src/components/AssetTrimEditor.tsx')
+const panelResizeHandle = read('src/renderer/src/components/PanelResizeHandle.tsx')
 const i18n = read('src/renderer/src/i18n.tsx')
 const rendererCss = [
   read('src/renderer/src/assets/base.css'),
@@ -89,7 +90,8 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetWatcher.ts'),
         join(projectRoot, 'src/shared/clipdock.ts'),
         join(projectRoot, 'src/shared/assetFilters.ts'),
-        join(projectRoot, 'src/renderer/src/previewScrub.ts')
+        join(projectRoot, 'src/renderer/src/previewScrub.ts'),
+        join(projectRoot, 'src/renderer/src/editorPanelLayout.ts')
       ]
     })
   )
@@ -110,7 +112,8 @@ function compileRuntimeModules() {
     watcher: requireCompiled(join(outDir, 'src/main/assetWatcher.js')),
     store: requireCompiled(join(outDir, 'src/main/assetStore.js')),
     probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js')),
-    scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js'))
+    scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js')),
+    editorLayout: requireCompiled(join(outDir, 'src/renderer/src/editorPanelLayout.js'))
   }
 }
 
@@ -1126,6 +1129,16 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.doesNotMatch(inspector, />\s*Notes\s*</)
   assert.doesNotMatch(inspector, /<details/)
   assert.match(inspector, /asset-editor-layout/)
+  assert.match(inspector, /EDITOR_PANEL_STORAGE_KEY/)
+  assert.match(inspector, /ResizeObserver/)
+  assert.match(inspector, /organizeCollapsed/)
+  assert.match(inspector, /detailsCollapsed/)
+  assert.match(panelResizeHandle, /role="separator"/)
+  assert.match(panelResizeHandle, /aria-valuemin/)
+  assert.match(panelResizeHandle, /ArrowLeft/)
+  assert.match(panelResizeHandle, /ArrowRight/)
+  assert.match(panelResizeHandle, /Home/)
+  assert.match(panelResizeHandle, /End/)
   assert.match(i18n, /clipdock\.language/)
   assert.match(i18n, /'sidebar\.language': 'Sprache'/)
   assert.match(i18n, /'sidebar\.language': 'Language'/)
@@ -1141,6 +1154,38 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(filterUi, /asset-filter-chips/)
   assert.match(filterUi, /filter\.clearAll/)
   assert.match(filterUi, /type="checkbox"/)
+})
+
+test('editor panel layout clamps, persists, and responds to available width', () => {
+  const layout = runtime.editorLayout
+  assert.deepEqual(layout.defaultEditorPanelLayout(), {
+    organizeWidth: 220,
+    detailsWidth: 220,
+    organizeCollapsed: false,
+    detailsCollapsed: false
+  })
+  assert.equal(layout.clampEditorPanelWidth(80), 140)
+  assert.equal(layout.clampEditorPanelWidth(500), 320)
+  assert.deepEqual(
+    layout.parseEditorPanelLayout(
+      JSON.stringify({
+        organizeWidth: 180,
+        detailsWidth: 280,
+        organizeCollapsed: true,
+        detailsCollapsed: false
+      })
+    ),
+    {
+      organizeWidth: 180,
+      detailsWidth: 280,
+      organizeCollapsed: true,
+      detailsCollapsed: false
+    }
+  )
+  assert.deepEqual(layout.parseEditorPanelLayout('{broken'), layout.defaultEditorPanelLayout())
+  assert.deepEqual(layout.responsivePanelCollapse(1280), { organize: false, details: false })
+  assert.deepEqual(layout.responsivePanelCollapse(899), { organize: false, details: true })
+  assert.deepEqual(layout.responsivePanelCollapse(719), { organize: true, details: true })
 })
 
 test('package, docs, and preview pipeline describe the shipped system', () => {
