@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, statSync } from 'node:fs'
-import { basename, dirname, extname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { refreshAssetSearch } from './assetSearch'
 import { buildAssetWhere, queryAssetFacets } from './assetQuery'
 import { persistAssetPoster } from './assetPosterStore'
+import {
+  finishFullPackScan,
+  finishIncrementalPackScan,
+  type ScannedAssetInput,
+  upsertScannedAssetRecord
+} from './assetScanStore'
 import {
   deleteSmartCollection,
   listSmartCollections,
@@ -46,27 +52,6 @@ export interface AssetStoreOptions {
   createId?: () => string
 }
 
-export interface ScannedAssetInput {
-  packId: string
-  filePath: string
-  kind: AssetKind
-  mediaType: AssetMediaType
-  overlayMode: OverlayMode
-  compatibility: CompatibilityLevel
-  sizeBytes: number
-  modifiedAtMs: number
-  durationMs: number | null
-  widthPixels: number | null
-  heightPixels: number | null
-  fps: number | null
-  codec: string | null
-  audioCodec: string | null
-  sampleRate: number | null
-  channels: number | null
-  hasAlpha: boolean
-  metadataJson: string | null
-}
-
 export interface StoredAssetPath {
   id: string
   filePath: string
@@ -92,6 +77,11 @@ export interface AssetStore {
   listPacks: (packIds?: string[]) => ClipdockResult<AssetPackSummary[]>
   upsertScannedAsset: (input: ScannedAssetInput) => ClipdockResult<{ id: string; created: boolean }>
   finishPackScan: (packId: string, seenAssetIds: string[]) => ClipdockResult<number>
+  finishIncrementalScan: (
+    packId: string,
+    relativeScopes: string[],
+    seenAssetIds: string[]
+  ) => ClipdockResult<number>
   queryAssets: (query: AssetQuery) => ClipdockResult<AssetPage>
   navigation: () => ClipdockResult<AssetNavigationSnapshot>
   updateAssets: (request: AssetUpdateRequest) => ClipdockResult<void>
@@ -351,85 +341,16 @@ class SqliteAssetStore implements AssetStore {
 
   upsertScannedAsset(input: ScannedAssetInput): ClipdockResult<{ id: string; created: boolean }> {
     try {
-      const saved = this.transaction(() => {
-        const pack = this.database
-          .prepare('SELECT root_path FROM asset_packs WHERE id = ?')
-          .get(input.packId) as { root_path: string } | undefined
-        if (!pack) throw new Error('Asset pack was not found.')
-        const normalized = normalizeAssetPath(input.filePath)
-        const existing = this.database
-          .prepare(
-            'SELECT id, modified_at_ms, size_bytes FROM assets WHERE normalized_file_path = ?'
-          )
-          .get(normalized) as { id: string; modified_at_ms: number; size_bytes: number } | undefined
-        const id = existing?.id ?? this.createId()
-        const timestamp = this.now()
-        const rel = relative(pack.root_path, input.filePath)
-        const categoryPath = dirname(rel) === '.' ? '' : dirname(rel)
-        const changed =
-          !existing ||
-          existing.modified_at_ms !== input.modifiedAtMs ||
-          existing.size_bytes !== input.sizeBytes
-        this.database
-          .prepare(
-            `
-        INSERT INTO assets (
-          id, pack_id, relative_path, category_path, display_name, file_path, normalized_file_path,
-          extension, kind, media_type, overlay_mode, compatibility, size_bytes, modified_at_ms,
-          duration_ms, width_pixels, height_pixels, fps, codec, audio_codec, sample_rate, channels,
-          has_alpha, metadata_json, favorite, note, status, preview_status, thumbnail_path,
-          preview_path, created_at_ms, updated_at_ms, last_error_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'ready', 'pending', NULL, NULL, ?, ?, NULL)
-        ON CONFLICT(normalized_file_path) DO UPDATE SET
-          pack_id=excluded.pack_id, relative_path=excluded.relative_path, category_path=excluded.category_path,
-          display_name=excluded.display_name, file_path=excluded.file_path, extension=excluded.extension,
-          media_type=excluded.media_type, compatibility=excluded.compatibility, size_bytes=excluded.size_bytes,
-          modified_at_ms=excluded.modified_at_ms, duration_ms=excluded.duration_ms,
-          width_pixels=excluded.width_pixels, height_pixels=excluded.height_pixels, fps=excluded.fps,
-          codec=excluded.codec, audio_codec=excluded.audio_codec, sample_rate=excluded.sample_rate,
-          channels=excluded.channels, has_alpha=excluded.has_alpha, metadata_json=excluded.metadata_json,
-          status='ready', preview_status=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN 'pending' ELSE assets.preview_status END,
-          thumbnail_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.thumbnail_path END,
-          preview_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.preview_path END,
-          poster_frame_ms=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.poster_frame_ms END,
-          poster_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.poster_path END,
-          trim_status=CASE WHEN (assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes) AND (assets.trim_start_ms IS NOT NULL OR assets.rotation_degrees != 0) THEN 'pending' ELSE assets.trim_status END,
-          trim_error_message=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.trim_error_message END,
-          updated_at_ms=excluded.updated_at_ms, last_error_message=NULL
-      `
-          )
-          .run(
-            id,
-            input.packId,
-            rel,
-            categoryPath,
-            basename(input.filePath, extname(input.filePath)),
-            input.filePath,
-            normalized,
-            extname(input.filePath).toLowerCase(),
-            input.kind,
-            input.mediaType,
-            input.overlayMode,
-            input.compatibility,
-            input.sizeBytes,
-            input.modifiedAtMs,
-            input.durationMs,
-            input.widthPixels,
-            input.heightPixels,
-            input.fps,
-            input.codec,
-            input.audioCodec,
-            input.sampleRate,
-            input.channels,
-            input.hasAlpha ? 1 : 0,
-            input.metadataJson,
-            timestamp,
-            timestamp
-          )
-        if (changed) this.queuePreviewJobs([id], 0, timestamp)
-        refreshAssetSearch(this.database, id)
-        return { id, created: !existing }
-      })
+      const timestamp = this.now()
+      const saved = this.transaction(() =>
+        upsertScannedAssetRecord(
+          this.database,
+          input,
+          this.createId,
+          timestamp,
+          (ids, priority, queuedAt) => this.queuePreviewJobs(ids, priority, queuedAt)
+        )
+      )
       return ok(saved)
     } catch (error) {
       return fail(error instanceof Error ? error.message : 'Asset could not be saved.', 'scan')
@@ -438,29 +359,31 @@ class SqliteAssetStore implements AssetStore {
 
   finishPackScan(packId: string, seenAssetIds: string[]): ClipdockResult<number> {
     try {
-      const missingCount = this.transaction(() => {
-        const timestamp = this.now()
-        const pack = this.database.prepare('SELECT 1 FROM asset_packs WHERE id=?').get(packId)
-        if (!pack) throw new Error('Asset pack was not found.')
-        this.database
-          .prepare(`UPDATE assets SET status='missing', updated_at_ms=? WHERE pack_id=?`)
-          .run(timestamp, packId)
-        const restore = this.database.prepare(
-          `UPDATE assets SET status='ready', last_error_message=NULL WHERE id=? AND pack_id=?`
-        )
-        for (const id of [...new Set(seenAssetIds)]) restore.run(id, packId)
-        this.database
-          .prepare(`UPDATE asset_packs SET last_scanned_at_ms=?, updated_at_ms=? WHERE id=?`)
-          .run(timestamp, timestamp, packId)
-        const missing = this.database
-          .prepare(`SELECT COUNT(*) count FROM assets WHERE pack_id=? AND status='missing'`)
-          .get(packId) as { count: number }
-        return Number(missing.count)
-      })
+      const missingCount = this.transaction(() =>
+        finishFullPackScan(this.database, packId, seenAssetIds, this.now())
+      )
       return ok(missingCount)
     } catch (error) {
       return fail(
         error instanceof Error ? error.message : 'Pack scan could not be finalized.',
+        'scan'
+      )
+    }
+  }
+
+  finishIncrementalScan(
+    packId: string,
+    relativeScopes: string[],
+    seenAssetIds: string[]
+  ): ClipdockResult<number> {
+    try {
+      const missingCount = this.transaction(() =>
+        finishIncrementalPackScan(this.database, packId, relativeScopes, seenAssetIds, this.now())
+      )
+      return ok(missingCount)
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : 'Pack changes could not be finalized.',
         'scan'
       )
     }

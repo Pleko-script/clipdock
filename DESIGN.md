@@ -116,6 +116,8 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - Dropping on a Collection adds references and never moves source files.
 - Saving a Smart Collection stores stable search, scope, filter, and sort keys; opening it evaluates those criteria against current asset data.
 - Renaming, updating, or deleting a Smart Collection never changes source media or manual Collection membership.
+- Linked packs are watched after startup, add, and relink. File bursts are debounced before affected paths are reconciled through the normal scan status model.
+- A disconnected root keeps its pack and asset metadata unchanged. Reconnect performs one recovery scan; manual rescan remains available.
 
 ## Anti-slop guardrails
 

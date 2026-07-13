@@ -1,7 +1,16 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,7 +25,9 @@ const ipc = read('src/main/assetIpc.ts')
 const storeSource = read('src/main/assetStore.ts')
 const schema = read('src/main/assetSchema.ts')
 const preview = read('src/main/assetPreview.ts')
+const scannerSource = read('src/main/assetScanner.ts')
 const trim = read('src/main/assetTrim.ts')
+const watcherSource = read('src/main/assetWatcher.ts')
 const preload = read('src/preload/index.ts')
 const app = read('src/renderer/src/App.tsx')
 const grid = read('src/renderer/src/components/AssetGrid.tsx')
@@ -68,12 +79,14 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/assetTrim.ts'),
         join(projectRoot, 'src/main/assetTrimStore.ts'),
         join(projectRoot, 'src/main/assetScanner.ts'),
+        join(projectRoot, 'src/main/assetScanStore.ts'),
         join(projectRoot, 'src/main/assetSchema.ts'),
         join(projectRoot, 'src/main/assetSearch.ts'),
         join(projectRoot, 'src/main/smartCollectionStore.ts'),
         join(projectRoot, 'src/main/assetStore.ts'),
         join(projectRoot, 'src/main/mediaProbe.ts'),
         join(projectRoot, 'src/main/mediaProcess.ts'),
+        join(projectRoot, 'src/main/assetWatcher.ts'),
         join(projectRoot, 'src/shared/clipdock.ts'),
         join(projectRoot, 'src/shared/assetFilters.ts'),
         join(projectRoot, 'src/renderer/src/previewScrub.ts')
@@ -94,6 +107,7 @@ function compileRuntimeModules() {
     preview: requireCompiled(join(outDir, 'src/main/assetPreview.js')),
     trim: requireCompiled(join(outDir, 'src/main/assetTrim.js')),
     scanner: requireCompiled(join(outDir, 'src/main/assetScanner.js')),
+    watcher: requireCompiled(join(outDir, 'src/main/assetWatcher.js')),
     store: requireCompiled(join(outDir, 'src/main/assetStore.js')),
     probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js')),
     scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js'))
@@ -183,6 +197,13 @@ test('Electron boundary is hardened and preserves media range headers', () => {
     ipc,
     /return withScanLock\(async \(\) => \{\s*const relinked = runtime\.store\.relinkPack/s
   )
+  assert.match(ipc, /createAssetPackWatcher/)
+  assert.match(ipc, /syncPackWatchers\(\)/)
+  assert.match(ipc, /reconcileAssetPackPaths/)
+  assert.match(watcherSource, /recursive: true/)
+  assert.match(watcherSource, /debounceMs/)
+  assert.match(watcherSource, /reconnectMs/)
+  assert.match(scannerSource, /finishIncrementalScan/)
 })
 
 test('IPC validation clamps and normalizes untrusted payloads', () => {
@@ -363,6 +384,63 @@ test('hover scrub timing, pointer mapping, and concurrency are deterministic', (
   assert.deepEqual(active, ['v2', 'v3', 'v4', 'a2'])
   active = runtime.scrub.nextPreviewIds(active, 'v3', false, typeFor)
   assert.deepEqual(active, ['v2', 'v4', 'a2'])
+})
+
+test('pack watcher debounces bursts and performs one reconnect reconciliation', async () => {
+  const handles = []
+  const calls = []
+  const watchFactory = (_rootPath, listener) => {
+    const listeners = { error: [], close: [] }
+    const handle = {
+      closed: false,
+      close() {
+        this.closed = true
+      },
+      on(event, callback) {
+        listeners[event].push(callback)
+        return this
+      },
+      change(fileName) {
+        listener('rename', fileName)
+      },
+      fail() {
+        for (const callback of listeners.error) callback(new Error('drive unavailable'))
+      }
+    }
+    handles.push(handle)
+    return handle
+  }
+  const watcher = runtime.watcher.createAssetPackWatcher(
+    async (_pack, paths) => {
+      calls.push(paths)
+      return 'complete'
+    },
+    { debounceMs: 10, reconnectMs: 10, watchFactory }
+  )
+  const pack = {
+    id: 'pack-1',
+    name: 'Pack',
+    rootPath: 'X:\\Pack',
+    assetCount: 0,
+    missingCount: 0,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    lastScannedAtMs: null
+  }
+  watcher.sync([pack])
+  handles[0].change('SFX\\new.wav')
+  handles[0].change('SFX\\new.wav')
+  handles[0].change('Transitions\\old.mp4')
+  handles[0].change('Transitions\\moved.mp4')
+  await new Promise((resolve) => setTimeout(resolve, 35))
+  assert.deepEqual(calls, [['SFX\\new.wav', 'Transitions\\old.mp4', 'Transitions\\moved.mp4']])
+
+  handles[0].fail()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.equal(handles.length, 2)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1], null)
+  watcher.dispose()
 })
 
 test('legacy migration preserves metadata and new updates are atomic', () => {
@@ -828,7 +906,8 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
       createId: createIdGenerator('media')
     }).value
     const packId = store.createPack(packRoot).value
-    const result = await runtime.scanner.scanAssetPack(store, store.listPacks([packId]).value[0])
+    const pack = store.listPacks([packId]).value[0]
+    const result = await runtime.scanner.scanAssetPack(store, pack)
     assert.equal(result.scannedFiles, 3)
     const assets = store.queryAssets({ limit: 200 }).value.items
     assert.deepEqual(assets.map((asset) => asset.kind).sort(), ['overlay', 'sound', 'transition'])
@@ -860,6 +939,14 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     assert.equal(soundPreview.previewPath, null)
     assert.match(posterPath, /-poster-250\.webp$/)
     assert.equal(existsSync(posterPath), true)
+    assert.equal(
+      store.completePreview(
+        transition.id,
+        transitionPreview.thumbnailPath,
+        transitionPreview.previewPath
+      ).ok,
+      true
+    )
     assert.equal(store.setPoster(transition.id, 250, posterPath).ok, true)
     assert.equal(store.getAsset(transition.id).value.posterFrameMs, 250)
 
@@ -914,6 +1001,87 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     assert.equal(alphaMetadata.widthPixels, 90)
     assert.equal(alphaMetadata.heightPixels, 160)
     assert.ok(alphaMetadata.durationMs >= 350 && alphaMetadata.durationMs <= 500)
+
+    const addedVideo = join(transitions, 'new-wipe.mp4')
+    copyFileSync(video, addedVideo)
+    const watchEvents = []
+    const added = await runtime.scanner.reconcileAssetPackPaths(
+      store,
+      pack,
+      [join('Transitions', 'new-wipe.mp4')],
+      (event) => watchEvents.push(event)
+    )
+    assert.equal(added.importedAssets, 1)
+    assert.equal(added.scannedFiles, 1)
+    assert.equal(store.queryAssets({}).value.totalCount, 4)
+    assert.ok(watchEvents.some((event) => event.type === 'scan-progress'))
+    assert.ok(watchEvents.some((event) => event.type === 'scan-completed'))
+    const addedAsset = store.queryAssets({ search: 'new-wipe' }).value.items[0]
+
+    const changedVideo = spawnSync(
+      ffmpeg,
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=size=192x108:rate=24',
+        '-t',
+        '0.9',
+        '-pix_fmt',
+        'yuv420p',
+        video
+      ],
+      { encoding: 'utf8' }
+    )
+    assert.equal(changedVideo.status, 0, changedVideo.stderr)
+    const changed = await runtime.scanner.reconcileAssetPackPaths(store, pack, [
+      join('Transitions', 'wipe.mp4')
+    ])
+    assert.equal(changed.updatedAssets, 1)
+    const changedAsset = store.getAsset(transition.id).value
+    assert.equal(changedAsset.previewStatus, 'pending')
+    assert.equal(changedAsset.posterFrameMs, null)
+    assert.equal(changedAsset.trimStatus, 'pending')
+    assert.equal(store.getAsset(alphaOverlay.id).value.status, 'ready')
+
+    const movedVideo = join(overlays, 'moved-wipe.mp4')
+    renameSync(addedVideo, movedVideo)
+    const moved = await runtime.scanner.reconcileAssetPackPaths(store, pack, [
+      join('Transitions', 'new-wipe.mp4'),
+      join('Overlays', 'moved-wipe.mp4')
+    ])
+    assert.equal(moved.importedAssets, 0)
+    assert.equal(moved.updatedAssets, 1)
+    assert.equal(store.queryAssets({}).value.totalCount, 4)
+    const movedAsset = store.getAsset(addedAsset.id).value
+    assert.equal(movedAsset.filePath, movedVideo)
+    assert.equal(movedAsset.status, 'ready')
+
+    rmSync(audio)
+    const removed = await runtime.scanner.reconcileAssetPackPaths(store, pack, [
+      join('SFX', 'impact.wav')
+    ])
+    assert.equal(removed.scannedFiles, 0)
+    assert.equal(store.getAsset(sound.id).value.status, 'missing')
+    assert.equal(store.queryAssets({}).value.totalCount, 4)
+
+    const beforeUnsupported = store.queryAssets({}).value.totalCount
+    writeFileSync(join(packRoot, 'ignored-2.mogrt'), 'ignored')
+    const unsupported = await runtime.scanner.reconcileAssetPackPaths(store, pack, [
+      'ignored-2.mogrt'
+    ])
+    assert.equal(unsupported.scannedFiles, 0)
+    assert.equal(store.queryAssets({}).value.totalCount, beforeUnsupported)
+
+    const offlineRoot = `${packRoot}-offline`
+    renameSync(packRoot, offlineRoot)
+    assert.equal(await runtime.scanner.reconcileAssetPackPaths(store, pack, null), null)
+    assert.equal(store.queryAssets({}).value.totalCount, 4)
+    renameSync(offlineRoot, packRoot)
+    const reconnected = await runtime.scanner.reconcileAssetPackPaths(store, pack, null)
+    assert.equal(reconnected.scannedFiles, 3)
+    assert.equal(store.getAsset(sound.id).value.status, 'missing')
   } finally {
     try {
       store?.close()

@@ -49,6 +49,7 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 | **Language** | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                               |
 | **Deliver**  | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.             |
 | **Recover**  | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                        |
+| **Sync**     | Automatic pack watching     | Debounces external file changes and reconciles only affected paths while the app is running.                |
 
 ## Workflow
 
@@ -58,7 +59,7 @@ Choose **Add Pack** and select a folder containing effects. The selected folder 
 
 ### 2. Find and preview
 
-ClipDock scans supported media, stores metadata first, and generates previews in the background. Search, filter, favorite, or group assets into Collections. Save a useful result view as a Smart Collection to re-run the same criteria against the current library. Hover a card for a quick preview or press `Space` for Quick Look.
+ClipDock scans supported media, stores metadata first, and generates previews in the background. While ClipDock is running, linked pack folders are watched for debounced additions, changes, moves, and removals; manual rescan remains available as a recovery action. Search, filter, favorite, or group assets into Collections. Save a useful result view as a Smart Collection to re-run the same criteria against the current library. Hover a card for a quick preview or press `Space` for Quick Look.
 
 ### 3. Drag into the edit
 
@@ -147,6 +148,7 @@ React renderer
       └─ Electron main process
           ├─ SQLite asset store and search
           ├─ pack scanner and metadata analysis
+          ├─ debounced linked-pack watchers
           ├─ persistent FFmpeg preview queue (max. 2 jobs)
           └─ validated native file drag
 ```

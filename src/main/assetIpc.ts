@@ -19,8 +19,9 @@ import {
   validAssetIds,
   validLabel
 } from './assetIpcValidation'
-import { scanAssetPack } from './assetScanner'
+import { reconcileAssetPackPaths, scanAssetPack } from './assetScanner'
 import { openAssetStore, type AssetStore } from './assetStore'
+import { createAssetPackWatcher } from './assetWatcher'
 
 const VIDEO_EXTENSIONS = new Set<string>(SUPPORTED_VIDEO_EXTENSIONS)
 const AUDIO_EXTENSIONS = new Set<string>(SUPPORTED_AUDIO_EXTENSIONS)
@@ -68,6 +69,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
   let disposed = false
   let workerRunning = false
   let scanRunning = false
+  let rendererContents: WebContents | null = null
   const trimsRunning = new Set<string>()
   const postersRunning = new Set<string>()
   const send = (sender: WebContents | null, event: AssetJobEvent): void => {
@@ -191,13 +193,37 @@ export function registerAssetIpc(): AssetIpcRegistration {
     return scanned.value[0] ? ok(scanned.value[0]) : fail(emptyMessage, 'scan')
   }
 
+  const packWatcher = createAssetPackWatcher(async (pack, changedPaths) => {
+    if (scanRunning) return 'busy'
+    scanRunning = true
+    try {
+      const result = await reconcileAssetPackPaths(runtime.store, pack, changedPaths, (event) =>
+        send(rendererContents, event)
+      )
+      if (!result) return 'unavailable'
+      void pumpPreviews(rendererContents)
+      return 'complete'
+    } finally {
+      scanRunning = false
+    }
+  })
+
+  const syncPackWatchers = (): void => {
+    const packs = runtime.store.listPacks()
+    if (packs.ok) packWatcher.sync(packs.value)
+  }
+
   for (const channel of assetInvokeChannels) ipcMain.removeHandler(channel)
   ipcMain.removeAllListeners(channels.startDrag)
 
-  ipcMain.handle(channels.navigation, () => runtime.store.navigation())
-  ipcMain.handle(channels.query, (_event, query: unknown) =>
-    runtime.store.queryAssets(parseAssetQuery(query))
-  )
+  ipcMain.handle(channels.navigation, (event) => {
+    rendererContents = event.sender
+    return runtime.store.navigation()
+  })
+  ipcMain.handle(channels.query, (event, query: unknown) => {
+    rendererContents = event.sender
+    return runtime.store.queryAssets(parseAssetQuery(query))
+  })
   ipcMain.handle(channels.addPack, async (event) => {
     const selected = await dialog.showOpenDialog({
       properties: ['openDirectory'],
@@ -208,6 +234,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
     return withScanLock(async () => {
       const created = runtime.store.createPack(selected.filePaths[0])
       if (!created.ok) return fail(created.error.message, 'scan')
+      syncPackWatchers()
       const scanned = await scanPacksUnlocked([created.value], event.sender)
       return firstScanResult(scanned, 'Pack scan returned no result.')
     })
@@ -227,6 +254,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
     return withScanLock(async () => {
       const relinked = runtime.store.relinkPack(packId, selected.filePaths[0])
       if (!relinked.ok) return fail(relinked.error.message, 'scan')
+      syncPackWatchers()
       const scanned = await scanPacksUnlocked([packId], event.sender)
       return firstScanResult(scanned, 'Relink scan returned no result.')
     })
@@ -430,11 +458,15 @@ export function registerAssetIpc(): AssetIpcRegistration {
     }
   })
 
-  setImmediate(() => void pumpPreviews(null))
+  setImmediate(() => {
+    syncPackWatchers()
+    void pumpPreviews(null)
+  })
 
   return {
     dispose: () => {
       disposed = true
+      packWatcher.dispose()
       for (const channel of assetInvokeChannels) ipcMain.removeHandler(channel)
       ipcMain.removeAllListeners(channels.startDrag)
       runtime.store.close()
