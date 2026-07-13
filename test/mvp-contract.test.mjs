@@ -62,6 +62,7 @@ function compileRuntimeModules() {
       include: [
         join(projectRoot, 'src/main/assetClassification.ts'),
         join(projectRoot, 'src/main/assetIpcValidation.ts'),
+        join(projectRoot, 'src/main/assetPosterStore.ts'),
         join(projectRoot, 'src/main/assetPreview.ts'),
         join(projectRoot, 'src/main/assetQuery.ts'),
         join(projectRoot, 'src/main/assetTrim.ts'),
@@ -74,7 +75,8 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/main/mediaProbe.ts'),
         join(projectRoot, 'src/main/mediaProcess.ts'),
         join(projectRoot, 'src/shared/clipdock.ts'),
-        join(projectRoot, 'src/shared/assetFilters.ts')
+        join(projectRoot, 'src/shared/assetFilters.ts'),
+        join(projectRoot, 'src/renderer/src/previewScrub.ts')
       ]
     })
   )
@@ -93,7 +95,8 @@ function compileRuntimeModules() {
     trim: requireCompiled(join(outDir, 'src/main/assetTrim.js')),
     scanner: requireCompiled(join(outDir, 'src/main/assetScanner.js')),
     store: requireCompiled(join(outDir, 'src/main/assetStore.js')),
-    probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js'))
+    probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js')),
+    scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js'))
   }
 }
 
@@ -297,6 +300,18 @@ test('IPC validation clamps and normalizes untrusted payloads', () => {
       rotationDegrees: 0
     }
   )
+  assert.deepEqual(runtime.validation.parseAssetPoster({ assetId: ' clip ', frameMs: 1234.6 }), {
+    assetId: 'clip',
+    frameMs: 1235
+  })
+  assert.deepEqual(runtime.validation.parseAssetPoster({ assetId: {}, frameMs: -5 }), {
+    assetId: '',
+    frameMs: 0
+  })
+  assert.deepEqual(runtime.validation.parseAssetPoster({ assetId: 'clip', frameMs: '100' }), {
+    assetId: 'clip',
+    frameMs: null
+  })
 })
 
 test('classification uses pack-relative paths and accepts media only', () => {
@@ -313,6 +328,41 @@ test('classification uses pack-relative paths and accepts media only', () => {
   )
   assert.equal(runtime.classification.inferAssetKind('plain/clip.mp4', 'video'), 'unknown')
   assert.equal(runtime.classification.inferAssetKind('anything.wav', 'audio'), 'sound')
+})
+
+test('hover scrub timing, pointer mapping, and concurrency are deterministic', () => {
+  assert.equal(runtime.scrub.VIDEO_HOVER_DELAY_MS, 250)
+  assert.equal(runtime.scrub.AUDIO_HOVER_DELAY_MS, 300)
+  assert.equal(runtime.scrub.CACHED_PREVIEW_RESPONSE_BUDGET_MS, 150)
+  assert.equal(runtime.scrub.MAX_ACTIVE_VIDEO_PREVIEWS, 3)
+  assert.equal(runtime.scrub.MAX_ACTIVE_AUDIO_PREVIEWS, 1)
+
+  assert.equal(runtime.scrub.pointerRatio(50, 0, 100), 0.5)
+  assert.equal(runtime.scrub.pointerRatio(-20, 0, 100), 0)
+  assert.equal(runtime.scrub.pointerRatio(120, 0, 100), 1)
+  assert.equal(runtime.scrub.pointerRatio(10, 0, 0), 0.5)
+  const left = runtime.scrub.scrubTimeSeconds(0, 4)
+  const middle = runtime.scrub.scrubTimeSeconds(0.5, 4)
+  const right = runtime.scrub.scrubTimeSeconds(1, 4)
+  assert.equal(left, 0)
+  assert.ok(left < middle && middle < right)
+  assert.ok(right < 4 && right > 3.9)
+
+  const media = new Map([
+    ['v1', 'video'],
+    ['v2', 'video'],
+    ['v3', 'video'],
+    ['v4', 'video'],
+    ['a1', 'audio'],
+    ['a2', 'audio']
+  ])
+  const typeFor = (id) => media.get(id)
+  let active = []
+  for (const id of ['v1', 'v2', 'a1', 'v3', 'v4', 'a2'])
+    active = runtime.scrub.nextPreviewIds(active, id, true, typeFor)
+  assert.deepEqual(active, ['v2', 'v3', 'v4', 'a2'])
+  active = runtime.scrub.nextPreviewIds(active, 'v3', false, typeFor)
+  assert.deepEqual(active, ['v2', 'v4', 'a2'])
 })
 
 test('legacy migration preserves metadata and new updates are atomic', () => {
@@ -349,6 +399,8 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(migrated.value.items[0].rotationDegrees, 0)
     assert.equal(migrated.value.items[0].lastUsedAtMs, null)
     assert.equal(migrated.value.items[0].useCount, 0)
+    assert.equal(migrated.value.items[0].posterFrameMs, null)
+    assert.equal(migrated.value.items[0].posterUrl, null)
     assert.deepEqual(store.navigation().value.smartCollections, [])
 
     const secondAsset = store.upsertScannedAsset({
@@ -517,6 +569,18 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.equal(store.getAsset('clip-1').value.trimStatus, 'pending')
     assert.equal(store.clearTrim('clip-1').ok, true)
 
+    const posterPath = join(workspace, 'previews', 'custom-poster.webp')
+    mkdirSync(join(workspace, 'previews'), { recursive: true })
+    writeFileSync(posterPath, 'poster')
+    assert.equal(store.setPoster('clip-1', 450, posterPath).ok, true)
+    assert.equal(store.getAsset('clip-1').value.posterFrameMs, 450)
+    assert.match(store.getAsset('clip-1').value.posterUrl, /clipdock-media:\/\/poster\//)
+    const resetPoster = store.setPoster('clip-1', null, null)
+    assert.equal(resetPoster.ok, true)
+    assert.equal(resetPoster.value, posterPath)
+    assert.equal(store.getAsset('clip-1').value.posterFrameMs, null)
+    assert.equal(store.setPoster('clip-1', 450, posterPath).ok, true)
+
     const smartCollectionId = savedSmartCollection.id
     store.close()
     store = null
@@ -531,6 +595,8 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
       createId: createIdGenerator('reopened'),
       now: () => clock
     }).value
+    assert.equal(store.getAsset('clip-1').value.posterFrameMs, 450)
+    assert.equal(store.resolveAssetPath('clip-1', 'poster').value, posterPath)
     const invalidSmartCollection = store.navigation().value.smartCollections[0]
     assert.equal(invalidSmartCollection.criteriaValid, false)
     assert.equal(invalidSmartCollection.criteria.scope.type, 'all')
@@ -543,6 +609,31 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
       true
     )
     assert.equal(store.navigation().value.smartCollections[0].criteriaValid, true)
+    assert.equal(
+      store.upsertScannedAsset({
+        packId: 'source-1',
+        filePath: mediaPath,
+        kind: 'unknown',
+        mediaType: 'video',
+        overlayMode: 'raw',
+        compatibility: 'expected',
+        sizeBytes: 10,
+        modifiedAtMs: 101,
+        durationMs: 1000,
+        widthPixels: 1920,
+        heightPixels: 1080,
+        fps: 30,
+        codec: 'h264',
+        audioCodec: null,
+        sampleRate: null,
+        channels: null,
+        hasAlpha: false,
+        metadataJson: null
+      }).ok,
+      true
+    )
+    assert.equal(store.getAsset('clip-1').value.posterFrameMs, null)
+    assert.equal(store.getAsset('clip-1').value.posterUrl, null)
     assert.equal(store.deleteSmartCollection(smartCollectionId).ok, true)
     assert.deepEqual(store.navigation().value.smartCollections, [])
     assert.equal(existsSync(mediaPath), true)
@@ -762,10 +853,15 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     )
     const transitionPreview = await runtime.preview.generateAssetPreview(transition, previewDir)
     const soundPreview = await runtime.preview.generateAssetPreview(sound, previewDir)
+    const posterPath = await runtime.preview.generatePosterFrame(transition, previewDir, 250)
     assert.match(transitionPreview.thumbnailPath, /\.webp$/)
     assert.ok(existsSync(transitionPreview.previewPath))
     assert.ok(existsSync(soundPreview.thumbnailPath))
     assert.equal(soundPreview.previewPath, null)
+    assert.match(posterPath, /-poster-250\.webp$/)
+    assert.equal(existsSync(posterPath), true)
+    assert.equal(store.setPoster(transition.id, 250, posterPath).ok, true)
+    assert.equal(store.getAsset(transition.id).value.posterFrameMs, 250)
 
     const begunTrim = store.beginTrim(transition.id, 100, 500, 0)
     assert.equal(begunTrim.ok, true, begunTrim.error?.message)
@@ -834,6 +930,16 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   )
   assert.doesNotMatch(renderer, /from ['"`]electron['"`]|from ['"`]node:|ipcRenderer/)
   assert.match(grid, /useVirtualizer/)
+  assert.match(grid, /onPointerMove/)
+  assert.match(grid, /aria-keyshortcuts="P Enter Space"/)
+  assert.match(grid, /preload="auto"/)
+  assert.match(grid, /muted/)
+  assert.match(grid, /asset\.previewUrl \?\? asset\.mediaUrl/)
+  assert.match(
+    grid,
+    /const startPreview[\s\S]*setWarming\(true\)[\s\S]*hoverTimer\.current = setTimeout/
+  )
+  assert.match(grid, /nextPreviewIds/)
   assert.match(app, /AssetLibraryScope/)
   assert.match(app, /scheduleRefresh/)
   assert.match(trimEditor, /role="slider"/)
@@ -844,6 +950,9 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(trimEditor, /trim\.rotateRight/)
   assert.match(trimEditor, /rotationDegrees/)
   assert.match(trimEditor, /clipdock\.previewVolume/)
+  assert.match(trimEditor, /trim\.setPoster/)
+  assert.match(trimEditor, /posterFrameMs/)
+  assert.match(trimEditor, /onSetPoster/)
   assert.match(trimEditor, /trim-volume-control/)
   assert.ok(app.indexOf('<AssetInspector') < app.indexOf('<div className="asset-results-bar">'))
   assert.doesNotMatch(inspector, />\s*Notes\s*</)

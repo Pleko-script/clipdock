@@ -5,6 +5,7 @@ import type {
   AssetJobEvent,
   AssetNavigationSnapshot,
   AssetPage,
+  AssetPosterRequest,
   AssetQuery,
   AssetScanResult,
   AssetSmartCollectionSaveRequest,
@@ -77,6 +78,8 @@ const clipdock: ClipdockApi = Object.freeze({
     }),
   setAssetTrim: (request: AssetTrimRequest) =>
     invoke<void>(channels.setTrim, 'ClipDock could not prepare the selected range.', request),
+  setAssetPoster: (request: AssetPosterRequest) =>
+    invoke<void>(channels.setPoster, 'ClipDock could not save the poster frame.', request),
   toggleAssetFavorite: (assetId: string) =>
     invoke<void>(channels.toggleFavorite, 'ClipDock could not update the favorite.', assetId),
   createCollection: (name: string) =>

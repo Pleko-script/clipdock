@@ -592,6 +592,18 @@
   position: absolute;
   inset: 0;
 }
+.asset-visual > video.scrub-warming {
+  visibility: hidden;
+}
+.asset-scrub-position {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 1px;
+  background: rgba(242, 245, 247, 0.72);
+  pointer-events: none;
+}
 .asset-placeholder {
   display: grid;
   width: 100%;

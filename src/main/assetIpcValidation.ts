@@ -7,6 +7,7 @@ import {
   type AssetDurationBucket,
   type AssetKind,
   type AssetLibraryScope,
+  type AssetPosterRequest,
   type AssetQuery,
   type AssetSortMode,
   type AssetSmartCollectionCriteria,
@@ -174,6 +175,15 @@ export function parseAssetTrim(value: unknown): AssetTrimRequest {
       input.rotationDegrees === 90 || input.rotationDegrees === 180 || input.rotationDegrees === 270
         ? input.rotationDegrees
         : 0
+  }
+}
+
+export function parseAssetPoster(value: unknown): AssetPosterRequest {
+  const input = record(value)
+  const frameMs = typeof input.frameMs === 'number' ? input.frameMs : Number.NaN
+  return {
+    assetId: validAssetId(input.assetId),
+    frameMs: Number.isFinite(frameMs) ? Math.max(0, Math.round(frameMs)) : null
   }
 }
 

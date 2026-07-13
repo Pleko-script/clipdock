@@ -97,8 +97,10 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - Favorite appears on hover or when active.
 - Selection uses a neutral border, never a colored glow.
 - Missing media and pending preview states remain explicit text states.
-- Hover preview starts after 250 ms for video or 300 ms for sound.
-- No more than three video previews and one sound preview may run at once.
+- Hover preview starts after 250 ms for video or 300 ms for sound. A video proxy warms during the delay, then horizontal pointer position scrubs its timeline without audio.
+- No more than three video previews and one sound preview may be active at once.
+- `P` starts or stops the same preview on a focused card without replacing Enter, Space, or arrow navigation.
+- A frame chosen in the video editor can replace the generated card thumbnail. Reset restores the generated thumbnail; a changed source invalidates the custom frame.
 
 ## Interaction contract
 

@@ -59,13 +59,18 @@ function isSameNavigation(targetUrl: string, appUrl: string): boolean {
 }
 
 function parseAssetRequest(rawUrl: string): {
-  kind: 'thumbnail' | 'preview' | 'media'
+  kind: 'thumbnail' | 'preview' | 'media' | 'poster'
   assetId: string
 } | null {
   try {
     const url = new URL(rawUrl)
     const kind =
-      url.host === 'thumbnail' || url.host === 'preview' || url.host === 'media' ? url.host : null
+      url.host === 'thumbnail' ||
+      url.host === 'preview' ||
+      url.host === 'media' ||
+      url.host === 'poster'
+        ? url.host
+        : null
     const assetId = decodeURIComponent(url.pathname.slice(1))
     return kind && assetId && assetId.length <= 128 ? { kind, assetId } : null
   } catch {

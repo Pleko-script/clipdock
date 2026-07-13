@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AssetStatus } from '../shared/clipdock'
 import { createAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 
-export const ASSET_SCHEMA_VERSION = 8
+export const ASSET_SCHEMA_VERSION = 9
 
 interface LegacySourceRow {
   id: string
@@ -89,6 +89,8 @@ function createTables(database: DatabaseSync): void {
       preview_status TEXT NOT NULL DEFAULT 'pending' CHECK (preview_status IN ('pending','ready','failed')),
       thumbnail_path TEXT,
       preview_path TEXT,
+      poster_frame_ms INTEGER,
+      poster_path TEXT,
       trim_start_ms INTEGER,
       trim_end_ms INTEGER,
       rotation_degrees INTEGER NOT NULL DEFAULT 0 CHECK (rotation_degrees IN (0,90,180,270)),
@@ -197,6 +199,17 @@ function ensureUsageColumns(database: DatabaseSync): void {
   database.exec(
     'CREATE INDEX IF NOT EXISTS idx_assets_last_used ON assets(last_used_at_ms DESC); CREATE INDEX IF NOT EXISTS idx_assets_use_count ON assets(use_count DESC, last_used_at_ms DESC);'
   )
+}
+
+function ensurePosterColumns(database: DatabaseSync): void {
+  const columns = new Set(
+    (database.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>).map(
+      (column) => column.name
+    )
+  )
+  if (!columns.has('poster_frame_ms'))
+    database.exec('ALTER TABLE assets ADD COLUMN poster_frame_ms INTEGER')
+  if (!columns.has('poster_path')) database.exec('ALTER TABLE assets ADD COLUMN poster_path TEXT')
 }
 
 function legacyRootPath(source: LegacySourceRow): string {
@@ -328,6 +341,7 @@ export function migrateAssetSchema(database: DatabaseSync, timestamp: number): v
     createTables(database)
     ensureTrimColumns(database)
     ensureUsageColumns(database)
+    ensurePosterColumns(database)
     database.exec(
       'UPDATE assets SET rotation_degrees=0 WHERE rotation_degrees IS NULL OR rotation_degrees NOT IN (0,90,180,270)'
     )

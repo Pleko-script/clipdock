@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react'
 import { FolderSearch, RefreshCw, X } from 'lucide-react'
 import type {
   AssetKind,
+  AssetPosterRequest,
   AssetSummary,
   AssetTrimRequest,
   AssetUpdateRequest,
@@ -27,6 +28,7 @@ export function AssetInspector({
   onClose,
   onUpdate,
   onSetTrim,
+  onSetPoster,
   onReveal,
   onRegenerate
 }: {
@@ -34,6 +36,7 @@ export function AssetInspector({
   onClose: () => void
   onUpdate: (request: AssetUpdateRequest) => void
   onSetTrim: (request: AssetTrimRequest) => Promise<ClipdockResult<void>>
+  onSetPoster: (request: AssetPosterRequest) => Promise<ClipdockResult<void>>
   onReveal: (asset: AssetSummary) => void
   onRegenerate: (assets: AssetSummary[]) => void
 }): JSX.Element {
@@ -137,14 +140,17 @@ export function AssetInspector({
         <div className="asset-editor-primary">
           {assets.length === 1 && (primary.mediaType !== 'video' || !primary.durationMs) ? (
             <div className="inspector-preview">
-              {primary.thumbnailUrl ? <img src={primary.thumbnailUrl} alt="" /> : null}
+              {primary.posterUrl || primary.thumbnailUrl ? (
+                <img src={primary.posterUrl ?? primary.thumbnailUrl ?? undefined} alt="" />
+              ) : null}
             </div>
           ) : null}
           {assets.length === 1 && primary.mediaType === 'video' && primary.durationMs ? (
             <AssetTrimEditor
-              key={`${primary.id}:${primary.trimStartMs}:${primary.trimEndMs}:${primary.rotationDegrees}:${primary.trimStatus}`}
+              key={`${primary.id}:${primary.trimStartMs}:${primary.trimEndMs}:${primary.rotationDegrees}:${primary.trimStatus}:${primary.posterFrameMs}`}
               asset={primary}
               onSetTrim={onSetTrim}
+              onSetPoster={onSetPoster}
             />
           ) : null}
         </div>

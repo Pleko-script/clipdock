@@ -22,6 +22,7 @@ import type {
   AssetKind,
   AssetLibraryScope,
   AssetNavigationSnapshot,
+  AssetPosterRequest,
   AssetQuery,
   AssetSortMode,
   AssetSmartCollectionCriteria,
@@ -333,6 +334,21 @@ function App(): JSX.Element {
     [localizeError, refresh, t]
   )
 
+  const setAssetPoster = useCallback(
+    async (request: AssetPosterRequest): Promise<ClipdockResult<void>> => {
+      setStatus(t(request.frameMs === null ? 'app.resettingPoster' : 'app.savingPoster'))
+      const result = await window.clipdock.setAssetPoster(request)
+      setStatus(
+        result.ok
+          ? t(request.frameMs === null ? 'app.posterReset' : 'app.posterReady')
+          : localizeError(result.error.message)
+      )
+      if (result.ok) await refresh()
+      return result
+    },
+    [localizeError, refresh, t]
+  )
+
   const selectAsset = (asset: AssetSummary, event: MouseEvent): void => {
     const index = assets.findIndex((item) => item.id === asset.id)
     setActiveId(asset.id)
@@ -613,13 +629,14 @@ function App(): JSX.Element {
             key={(selectedAssets.length ? selectedAssets : activeAsset ? [activeAsset] : [])
               .map(
                 (asset) =>
-                  `${asset.id}:${asset.trimStartMs}:${asset.trimEndMs}:${asset.rotationDegrees}:${asset.trimStatus}`
+                  `${asset.id}:${asset.trimStartMs}:${asset.trimEndMs}:${asset.rotationDegrees}:${asset.trimStatus}:${asset.posterFrameMs}`
               )
               .join(':')}
             assets={selectedAssets.length ? selectedAssets : activeAsset ? [activeAsset] : []}
             onClose={() => setInspectorOpen(false)}
             onUpdate={updateAssets}
             onSetTrim={setAssetTrim}
+            onSetPoster={setAssetPoster}
             onReveal={(asset) => void mutate((bridge) => bridge.revealAsset(asset.id))}
             onRegenerate={(items) =>
               void mutate((bridge) => bridge.regeneratePreviews(items.map((item) => item.id)))

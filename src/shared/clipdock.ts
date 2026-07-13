@@ -109,7 +109,9 @@ export interface AssetSummary {
   rotationDegrees: VideoRotation
   trimStatus: TrimStatus
   trimErrorMessage: string | null
+  posterFrameMs: number | null
   thumbnailUrl: string | null
+  posterUrl: string | null
   previewUrl: string | null
   mediaUrl: string
   lastErrorMessage: string | null
@@ -228,6 +230,11 @@ export interface AssetTrimRequest {
   rotationDegrees: VideoRotation
 }
 
+export interface AssetPosterRequest {
+  assetId: string
+  frameMs: number | null
+}
+
 export interface AssetScanResult {
   packId: string
   scannedFiles: number
@@ -263,6 +270,7 @@ export interface ClipdockApi {
   rescanPacks: (packIds?: string[]) => Promise<ClipdockResult<AssetScanResult[]>>
   updateAssets: (request: AssetUpdateRequest) => Promise<ClipdockResult<void>>
   setAssetTrim: (request: AssetTrimRequest) => Promise<ClipdockResult<void>>
+  setAssetPoster: (request: AssetPosterRequest) => Promise<ClipdockResult<void>>
   toggleAssetFavorite: (assetId: string) => Promise<ClipdockResult<void>>
   createCollection: (name: string) => Promise<ClipdockResult<void>>
   renameCollection: (collectionId: string, name: string) => Promise<ClipdockResult<void>>

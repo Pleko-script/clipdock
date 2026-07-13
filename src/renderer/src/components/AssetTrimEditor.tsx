@@ -10,6 +10,8 @@ import {
 import {
   Check,
   CircleAlert,
+  ImageOff,
+  ImagePlus,
   LoaderCircle,
   Maximize2,
   Pause,
@@ -22,6 +24,7 @@ import {
 } from 'lucide-react'
 import {
   MIN_VIDEO_TRIM_MS,
+  type AssetPosterRequest,
   type AssetSummary,
   type AssetTrimRequest,
   type ClipdockResult,
@@ -39,10 +42,12 @@ function timecode(milliseconds: number): string {
 
 export function AssetTrimEditor({
   asset,
-  onSetTrim
+  onSetTrim,
+  onSetPoster
 }: {
   asset: AssetSummary
   onSetTrim: (request: AssetTrimRequest) => Promise<ClipdockResult<void>>
+  onSetPoster: (request: AssetPosterRequest) => Promise<ClipdockResult<void>>
 }): JSX.Element {
   const { error: localizeError, t } = useI18n()
   const duration = Math.max(MIN_VIDEO_TRIM_MS, Math.round(asset.durationMs ?? 0))
@@ -67,6 +72,7 @@ export function AssetTrimEditor({
   })
   const [muted, setMuted] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [posterSaving, setPosterSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const hasSavedRange = asset.trimStartMs !== null && asset.trimEndMs !== null
@@ -113,6 +119,14 @@ export function AssetTrimEditor({
     setError(null)
     const result = await onSetTrim(request)
     setSaving(false)
+    if (!result.ok) setError(localizeError(result.error.message))
+  }
+
+  const savePoster = async (frameMs: number | null): Promise<void> => {
+    setPosterSaving(true)
+    setError(null)
+    const result = await onSetPoster({ assetId: asset.id, frameMs })
+    setPosterSaving(false)
     if (!result.ok) setError(localizeError(result.error.message))
   }
 
@@ -220,7 +234,7 @@ export function AssetTrimEditor({
         <video
           ref={videoRef}
           src={asset.mediaUrl}
-          poster={asset.thumbnailUrl ?? undefined}
+          poster={asset.posterUrl ?? asset.thumbnailUrl ?? undefined}
           preload="metadata"
           style={{ transform: `rotate(${rotationDegrees}deg)` }}
           onClick={playRange}
@@ -254,6 +268,26 @@ export function AssetTrimEditor({
         <output>{timecode(currentMs)}</output>
         <span>/</span>
         <span>{timecode(duration)}</span>
+        <button
+          type="button"
+          disabled={posterSaving}
+          onClick={() => void savePoster(Math.round(currentMs))}
+          title={t('trim.setPosterTitle', { time: timecode(currentMs) })}
+          aria-label={t('trim.setPoster')}
+        >
+          <ImagePlus size={14} />
+        </button>
+        {asset.posterFrameMs !== null ? (
+          <button
+            type="button"
+            disabled={posterSaving}
+            onClick={() => void savePoster(null)}
+            title={t('trim.resetPosterTitle')}
+            aria-label={t('trim.resetPoster')}
+          >
+            <ImageOff size={14} />
+          </button>
+        ) : null}
         <span className="trim-player-spacer" />
         <button type="button" onClick={() => rotate(-1)} aria-label={t('trim.rotateLeft')}>
           <RotateCcw size={14} />

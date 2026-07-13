@@ -6,12 +6,20 @@ import {
   type CSSProperties,
   type DragEvent,
   type JSX,
-  type MouseEvent
+  type MouseEvent,
+  type PointerEvent
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, AudioLines, Film, Heart, Layers3, Scissors } from 'lucide-react'
 import type { AssetSummary } from '../../../shared/clipdock'
 import { useI18n } from '../i18n'
+import {
+  AUDIO_HOVER_DELAY_MS,
+  nextPreviewIds,
+  pointerRatio,
+  scrubTimeSeconds,
+  VIDEO_HOVER_DELAY_MS
+} from '../previewScrub'
 
 const GAP = 14
 
@@ -50,22 +58,74 @@ function AssetCard({
 }): JSX.Element {
   const { kind, t } = useI18n()
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const seekFrame = useRef<number | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const onPreviewRef = useRef(onPreview)
+  const scrubRatioRef = useRef(0.5)
+  const [warming, setWarming] = useState(false)
+  const [scrubRatio, setScrubRatio] = useState(0.5)
 
-  const startHover = (): void => {
-    hoverTimer.current = setTimeout(() => onPreview(true), asset.mediaType === 'audio' ? 300 : 250)
+  useEffect(() => {
+    onPreviewRef.current = onPreview
+  }, [onPreview])
+
+  const seekPreview = (ratio: number): void => {
+    const video = videoRef.current
+    if (!video || !Number.isFinite(video.duration)) return
+    video.pause()
+    video.currentTime = scrubTimeSeconds(ratio, video.duration)
   }
-  const stopHover = (): void => {
+
+  const scheduleSeek = (ratio: number): void => {
+    if (seekFrame.current !== null) cancelAnimationFrame(seekFrame.current)
+    seekFrame.current = requestAnimationFrame(() => {
+      seekFrame.current = null
+      seekPreview(ratio)
+    })
+  }
+
+  const updateScrubRatio = (ratio: number): void => {
+    scrubRatioRef.current = ratio
+    setScrubRatio(ratio)
+  }
+
+  const startPreview = (ratio: number): void => {
+    if (asset.status !== 'ready') return
+    if (hoverTimer.current) clearTimeout(hoverTimer.current)
+    updateScrubRatio(ratio)
+    if (asset.mediaType === 'video') setWarming(true)
+    hoverTimer.current = setTimeout(
+      () => {
+        hoverTimer.current = null
+        onPreviewRef.current(true)
+        if (asset.mediaType === 'video') scheduleSeek(scrubRatioRef.current)
+      },
+      asset.mediaType === 'audio' ? AUDIO_HOVER_DELAY_MS : VIDEO_HOVER_DELAY_MS
+    )
+  }
+
+  const stopPreview = (): void => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
     hoverTimer.current = null
-    onPreview(false)
+    if (seekFrame.current !== null) cancelAnimationFrame(seekFrame.current)
+    seekFrame.current = null
+    setWarming(false)
+    onPreviewRef.current(false)
   }
 
   useEffect(
     () => () => {
       if (hoverTimer.current) clearTimeout(hoverTimer.current)
+      if (seekFrame.current !== null) cancelAnimationFrame(seekFrame.current)
+      onPreviewRef.current(false)
     },
     []
   )
+
+  const pointerPosition = (event: PointerEvent<HTMLElement>): number => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    return pointerRatio(event.clientX, bounds.left, bounds.width)
+  }
 
   return (
     <article
@@ -73,30 +133,56 @@ function AssetCard({
       role="button"
       tabIndex={0}
       aria-pressed={selected}
+      aria-keyshortcuts="P Enter Space"
       draggable={asset.status === 'ready'}
       onClick={onSelect}
       onDoubleClick={onOpen}
       onKeyDown={(event) => {
+        if (event.key.toLowerCase() === 'p') {
+          event.preventDefault()
+          event.stopPropagation()
+          if (previewing || hoverTimer.current) stopPreview()
+          else startPreview(0.5)
+          return
+        }
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
         event.stopPropagation()
         onOpen()
       }}
+      onBlur={stopPreview}
       onDragStart={onDrag}
-      onMouseEnter={startHover}
-      onMouseLeave={stopHover}
+      onPointerEnter={(event) => startPreview(pointerPosition(event))}
+      onPointerMove={(event) => {
+        if (asset.mediaType !== 'video') return
+        const ratio = pointerPosition(event)
+        updateScrubRatio(ratio)
+        if (previewing) scheduleSeek(ratio)
+      }}
+      onPointerLeave={stopPreview}
       title={asset.filePath}
     >
       <div className="asset-visual">
-        {asset.thumbnailUrl ? (
-          <img src={asset.thumbnailUrl} alt="" draggable={false} />
+        {asset.posterUrl || asset.thumbnailUrl ? (
+          <img src={asset.posterUrl ?? asset.thumbnailUrl ?? undefined} alt="" draggable={false} />
         ) : (
           <div className="asset-placeholder">
             <KindIcon asset={asset} />
           </div>
         )}
-        {previewing && asset.mediaType === 'video' && (asset.previewUrl || asset.mediaUrl) ? (
-          <video src={asset.previewUrl ?? asset.mediaUrl} autoPlay muted loop playsInline />
+        {warming && asset.mediaType === 'video' && (asset.previewUrl || asset.mediaUrl) ? (
+          <video
+            ref={videoRef}
+            className={previewing ? 'scrub-active' : 'scrub-warming'}
+            src={asset.previewUrl ?? asset.mediaUrl}
+            preload="auto"
+            muted
+            playsInline
+            onLoadedMetadata={() => seekPreview(scrubRatioRef.current)}
+          />
+        ) : null}
+        {previewing && asset.mediaType === 'video' ? (
+          <span className="asset-scrub-position" style={{ left: `${scrubRatio * 100}%` }} />
         ) : null}
         {previewing && asset.mediaType === 'audio' ? (
           <audio src={asset.mediaUrl} autoPlay onEnded={() => onPreview(false)} />
@@ -199,6 +285,10 @@ export function AssetGrid({
 
   const virtualRows = virtualizer.getVirtualItems()
   const style = useMemo(() => ({ '--asset-columns': columns }) as CSSProperties, [columns])
+  const mediaTypes = useMemo(
+    () => new Map(assets.map((asset) => [asset.id, asset.mediaType])),
+    [assets]
+  )
 
   if (assets.length === 0) {
     return (
@@ -232,17 +322,7 @@ export function AssetGrid({
                 onFavorite={() => onFavorite(asset)}
                 onPreview={(previewing) =>
                   setPreviewIds((current) =>
-                    previewing
-                      ? [
-                          ...current.filter(
-                            (id) =>
-                              id !== asset.id &&
-                              (asset.mediaType !== 'audio' ||
-                                assets.find((item) => item.id === id)?.mediaType !== 'audio')
-                          ),
-                          asset.id
-                        ].slice(-3)
-                      : current.filter((id) => id !== asset.id)
+                    nextPreviewIds(current, asset.id, previewing, (id) => mediaTypes.get(id))
                   )
                 }
               />

@@ -6,10 +6,11 @@ import { SUPPORTED_AUDIO_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS } from '../share
 import { assetInvokeChannels, assetIpcChannels as channels } from '../shared/ipcChannels'
 import type { AssetJobEvent, AssetScanResult, ClipdockResult } from '../shared/clipdock'
 import icon from '../../resources/icon.png?asset'
-import { generateAssetPreview } from './assetPreview'
+import { generateAssetPreview, generatePosterFrame } from './assetPreview'
 import { generateTrimmedAsset } from './assetTrim'
 import {
   parseAssetDragRequest,
+  parseAssetPoster,
   parseAssetQuery,
   parseSmartCollectionSave,
   parseAssetTrim,
@@ -34,7 +35,7 @@ export interface AssetIpcRegistration {
   dispose: () => void
   resolveAssetPath: (
     assetId: string,
-    kind: 'media' | 'thumbnail' | 'preview'
+    kind: 'media' | 'thumbnail' | 'preview' | 'poster'
   ) => ClipdockResult<string>
 }
 
@@ -68,6 +69,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
   let workerRunning = false
   let scanRunning = false
   const trimsRunning = new Set<string>()
+  const postersRunning = new Set<string>()
   const send = (sender: WebContents | null, event: AssetJobEvent): void => {
     if (sender && !sender.isDestroyed()) sender.send(channels.jobEvent, event)
   }
@@ -76,10 +78,10 @@ export function registerAssetIpc(): AssetIpcRegistration {
     previous: ClipdockResult<string>,
     replacement: string | null
   ): Promise<void> => {
-    if (!previous.ok || !replacement) return
+    if (!previous.ok) return
     const oldPath = resolve(previous.value)
     const cacheRoot = `${resolve(runtime.previewCacheDir)}${sep}`
-    if (oldPath !== resolve(replacement) && oldPath.startsWith(cacheRoot)) {
+    if (oldPath !== (replacement ? resolve(replacement) : null) && oldPath.startsWith(cacheRoot)) {
       try {
         await rm(oldPath, { force: true })
       } catch {
@@ -298,6 +300,43 @@ export function registerAssetIpc(): AssetIpcRegistration {
       return fail<void>(message, 'update')
     } finally {
       trimsRunning.delete(request.assetId)
+    }
+  })
+  ipcMain.handle(channels.setPoster, async (_event, rawRequest: unknown) => {
+    const request = parseAssetPoster(rawRequest)
+    if (!request.assetId) return fail<void>('Asset was not found.', 'update')
+    if (postersRunning.has(request.assetId))
+      return fail<void>('A poster frame is already being prepared.', 'update')
+
+    const asset = runtime.store.getAsset(request.assetId)
+    if (!asset.ok) return asset
+    if (asset.value.mediaType !== 'video' || asset.value.status !== 'ready')
+      return fail<void>('Poster frames require an available video asset.', 'update')
+
+    if (request.frameMs === null) {
+      const cleared = runtime.store.setPoster(request.assetId, null, null)
+      if (!cleared.ok) return cleared
+      if (cleared.value) await removeStalePreview(ok(cleared.value), null)
+      return ok(undefined)
+    }
+
+    postersRunning.add(request.assetId)
+    try {
+      const maximum = Math.max(0, (asset.value.durationMs ?? request.frameMs) - 1)
+      const frameMs = Math.min(maximum, request.frameMs)
+      const posterPath = await generatePosterFrame(asset.value, runtime.previewCacheDir, frameMs)
+      const saved = runtime.store.setPoster(request.assetId, frameMs, posterPath)
+      if (!saved.ok) {
+        await removeStalePreview(ok(posterPath), null)
+        return saved
+      }
+      if (saved.value) await removeStalePreview(ok(saved.value), posterPath)
+      return ok(undefined)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Poster frame generation failed.'
+      return fail<void>(message.slice(0, 1000), 'update')
+    } finally {
+      postersRunning.delete(request.assetId)
     }
   })
   ipcMain.handle(channels.toggleFavorite, (_event, assetId: unknown) =>

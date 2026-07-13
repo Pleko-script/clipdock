@@ -150,6 +150,39 @@ async function renderWebpThumbnail(previewPath: string, thumbnailPath: string): 
   ])
 }
 
+export async function generatePosterFrame(
+  asset: AssetSummary,
+  previewCacheDir: string,
+  frameMs: number
+): Promise<string> {
+  if (asset.mediaType !== 'video') throw new Error('Poster frames require a video asset.')
+  const maximum = Math.max(0, (asset.durationMs ?? frameMs) - 1)
+  const safeFrameMs = Math.min(maximum, Math.max(0, Math.round(frameMs)))
+  const outputPath = join(
+    previewCacheDir,
+    `${asset.id}-${previewCacheKey(asset)}-poster-${safeFrameMs}.webp`
+  )
+  await mkdir(previewCacheDir, { recursive: true })
+  await runFfmpeg([
+    '-y',
+    '-i',
+    asset.filePath,
+    '-ss',
+    (safeFrameMs / 1000).toFixed(3),
+    '-frames:v',
+    '1',
+    '-vf',
+    'scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2',
+    '-c:v',
+    'libwebp',
+    '-quality',
+    '85',
+    outputPath
+  ])
+  await access(outputPath)
+  return outputPath
+}
+
 export async function generateAssetPreview(
   asset: AssetSummary,
   previewCacheDir: string

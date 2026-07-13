@@ -4,6 +4,7 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { refreshAssetSearch } from './assetSearch'
 import { buildAssetWhere, queryAssetFacets } from './assetQuery'
+import { persistAssetPoster } from './assetPosterStore'
 import {
   deleteSmartCollection,
   listSmartCollections,
@@ -37,7 +38,7 @@ import type {
 } from '../shared/clipdock'
 
 const DEFAULT_PAGE_SIZE = 200
-
+type AssetResourceKind = 'media' | 'thumbnail' | 'preview' | 'poster'
 export interface AssetStoreOptions {
   databaseFile: string
   previewCacheDir: string
@@ -116,6 +117,11 @@ export interface AssetStore {
     message: string
   ) => ClipdockResult<void>
   clearTrim: (assetId: string) => ClipdockResult<string | null>
+  setPoster: (
+    assetId: string,
+    frameMs: number | null,
+    posterPath: string | null
+  ) => ClipdockResult<string | null>
   toggleFavorite: (assetId: string) => ClipdockResult<void>
   createCollection: (name: string) => ClipdockResult<void>
   renameCollection: (collectionId: string, name: string) => ClipdockResult<void>
@@ -125,10 +131,7 @@ export interface AssetStore {
   deleteSmartCollection: (smartCollectionId: string) => ClipdockResult<void>
   getAssetPath: (assetId: string) => ClipdockResult<StoredAssetPath>
   getAsset: (assetId: string) => ClipdockResult<AssetSummary>
-  resolveAssetPath: (
-    assetId: string,
-    kind: 'media' | 'thumbnail' | 'preview'
-  ) => ClipdockResult<string>
+  resolveAssetPath: (assetId: string, kind: AssetResourceKind) => ClipdockResult<string>
   enqueuePreview: (assetIds: string[], priority?: number) => ClipdockResult<void>
   claimPreviewJobs: (limit: number) => ClipdockResult<PreviewJobRecord[]>
   completePreview: (
@@ -173,6 +176,8 @@ interface AssetRow {
   preview_status: PreviewStatus
   thumbnail_path: string | null
   preview_path: string | null
+  poster_frame_ms: number | null
+  poster_path: string | null
   trim_start_ms: number | null
   trim_end_ms: number | null
   rotation_degrees: VideoRotation
@@ -193,7 +198,7 @@ function fail<T>(
   return { ok: false, error: { code: 'LIBRARY_PERSIST_FAILED', phase, message } }
 }
 
-function assetUrl(kind: 'media' | 'thumbnail' | 'preview', id: string, stamp: number): string {
+function assetUrl(kind: AssetResourceKind, id: string, stamp: number): string {
   return `clipdock-media://${kind}/${encodeURIComponent(id)}?v=${stamp}`
 }
 
@@ -386,6 +391,8 @@ class SqliteAssetStore implements AssetStore {
           status='ready', preview_status=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN 'pending' ELSE assets.preview_status END,
           thumbnail_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.thumbnail_path END,
           preview_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.preview_path END,
+          poster_frame_ms=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.poster_frame_ms END,
+          poster_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.poster_path END,
           trim_status=CASE WHEN (assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes) AND (assets.trim_start_ms IS NOT NULL OR assets.rotation_degrees != 0) THEN 'pending' ELSE assets.trim_status END,
           trim_error_message=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.trim_error_message END,
           updated_at_ms=excluded.updated_at_ms, last_error_message=NULL
@@ -779,6 +786,13 @@ class SqliteAssetStore implements AssetStore {
   clearTrim(assetId: string): ClipdockResult<string | null> {
     return clearAssetTrim(this.database, assetId, this.now())
   }
+  setPoster(
+    assetId: string,
+    frameMs: number | null,
+    posterPath: string | null
+  ): ClipdockResult<string | null> {
+    return persistAssetPoster(this.database, assetId, frameMs, posterPath, this.now())
+  }
   getAssetPath(assetId: string): ClipdockResult<StoredAssetPath> {
     try {
       const row = this.database
@@ -831,15 +845,17 @@ class SqliteAssetStore implements AssetStore {
     }
   }
 
-  resolveAssetPath(
-    assetId: string,
-    kind: 'media' | 'thumbnail' | 'preview'
-  ): ClipdockResult<string> {
+  resolveAssetPath(assetId: string, kind: AssetResourceKind): ClipdockResult<string> {
     try {
       const row = this.database
-        .prepare('SELECT file_path,thumbnail_path,preview_path FROM assets WHERE id=?')
+        .prepare('SELECT file_path,thumbnail_path,preview_path,poster_path FROM assets WHERE id=?')
         .get(assetId) as
-        | { file_path: string; thumbnail_path: string | null; preview_path: string | null }
+        | {
+            file_path: string
+            thumbnail_path: string | null
+            preview_path: string | null
+            poster_path: string | null
+          }
         | undefined
       if (!row) return fail('Asset was not found.')
       const value =
@@ -847,7 +863,9 @@ class SqliteAssetStore implements AssetStore {
           ? row.file_path
           : kind === 'thumbnail'
             ? row.thumbnail_path
-            : row.preview_path
+            : kind === 'preview'
+              ? row.preview_path
+              : row.poster_path
       return value ? ok(value) : fail(`Asset ${kind} is not ready.`)
     } catch {
       return fail('Asset path could not be resolved.')
@@ -1036,7 +1054,9 @@ class SqliteAssetStore implements AssetStore {
       rotationDegrees: [90, 180, 270].includes(row.rotation_degrees) ? row.rotation_degrees : 0,
       trimStatus: row.trim_status,
       trimErrorMessage: row.trim_error_message,
+      posterFrameMs: row.poster_frame_ms,
       thumbnailUrl: row.thumbnail_path ? assetUrl('thumbnail', row.id, row.updated_at_ms) : null,
+      posterUrl: row.poster_path ? assetUrl('poster', row.id, row.updated_at_ms) : null,
       previewUrl: row.preview_path ? assetUrl('preview', row.id, row.updated_at_ms) : null,
       mediaUrl: assetUrl('media', row.id, row.updated_at_ms),
       lastErrorMessage: row.last_error_message

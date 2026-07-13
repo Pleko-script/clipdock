@@ -35,7 +35,7 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 
 |              | Feature                     | What it does                                                                                                |
 | ------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Browse**   | Virtualized asset grid      | Keeps large libraries responsive while showing full-bleed thumbnails.                                       |
+| **Browse**   | Scrubbable asset grid       | Maps horizontal pointer position to a muted cached preview while keeping large libraries virtualized.       |
 | **Preview**  | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.               |
 | **Find**     | Search and live filters     | Combines faceted media filters with live result counts while keeping every result page capped at 200.       |
 | **Reuse**    | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                     |
@@ -45,6 +45,7 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 | **Trim**     | Non-destructive In / Out    | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                   |
 | **Rotate**   | Quarter-turn video edits    | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                  |
 | **Listen**   | Preview volume              | Plays available clip audio with a persistent volume slider and mute control.                                |
+| **Poster**   | Custom poster frames        | Uses the current video frame as a persistent card image without changing the source.                        |
 | **Language** | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                               |
 | **Deliver**  | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.             |
 | **Recover**  | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                        |
@@ -61,7 +62,7 @@ ClipDock scans supported media, stores metadata first, and generates previews in
 
 ### 3. Drag into the edit
 
-For a video, open the centered editor above the asset grid to set optional **In** and **Out** points or rotate the frame in 90° steps. Organizing controls stay visible on the left and file details on the right, without an internal editor scrollbar. The square `contain` preview keeps portrait and landscape footage fully visible. When the source has audio, the preview volume and mute controls apply immediately and persist locally. ClipDock renders the edit into its local cache; opaque footage becomes a high-quality H.264 MP4 and alpha footage becomes a ProRes 4444 MOV. Resetting returns the card to its original file.
+For a video, open the centered editor above the asset grid to set optional **In** and **Out** points, rotate the frame in 90° steps, or use the current frame as the card's poster. Organizing controls stay visible on the left and file details on the right, without an internal editor scrollbar. The square `contain` preview keeps portrait and landscape footage fully visible. When the source has audio, the preview volume and mute controls apply immediately and persist locally. ClipDock renders the edit into its local cache; opaque footage becomes a high-quality H.264 MP4 and alpha footage becomes a ProRes 4444 MOV. Resetting returns the card to its original file.
 
 Drag a card—or a multi-selection—into your editor. Cards with a prepared range or rotation drag the cached result; all other cards drag their original media:
 
@@ -121,6 +122,7 @@ Format support does not guarantee that every codec inside a container is accepte
 | `/`                           | Focus search                      |
 | Arrow keys                    | Move through assets               |
 | `Space`                       | Open Quick Look                   |
+| `P` on a focused card         | Start or stop its grid preview    |
 | `F`                           | Toggle favorite                   |
 | `Esc`                         | Close Quick Look or stop playback |
 | `Ctrl/Cmd+A`                  | Select the loaded result page     |
