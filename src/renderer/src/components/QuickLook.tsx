@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react'
 import { Heart, X } from 'lucide-react'
 import type { AssetSummary } from '../../../shared/clipdock'
 import { useI18n } from '../i18n'
+import { AudioPreviewEditor } from './AudioPreviewEditor'
 
 export function QuickLook({
   asset,
@@ -59,15 +60,7 @@ export function QuickLook({
               onLoadedMetadata={(event) => applyStoredVolume(event.currentTarget)}
             />
           ) : (
-            <div className="quick-look-audio">
-              {asset.thumbnailUrl ? <img src={asset.thumbnailUrl} alt="" /> : null}
-              <audio
-                src={asset.mediaUrl}
-                autoPlay
-                controls
-                onLoadedMetadata={(event) => applyStoredVolume(event.currentTarget)}
-              />
-            </div>
+            <AudioPreviewEditor asset={asset} playerId={`${asset.id}:quick-look`} autoPlay />
           )}
         </div>
         <footer>
@@ -77,7 +70,7 @@ export function QuickLook({
               ? `${(asset.durationMs / 1000).toFixed(1)}s`
               : t('quick.unknownDuration')}
           </span>
-          {asset.previewUrl ? (
+          {asset.mediaType === 'video' && asset.previewUrl ? (
             <div>
               <button
                 type="button"

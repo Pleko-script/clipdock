@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import type { AssetSummary } from '../shared/clipdock'
 import { runFfmpeg } from './mediaProcess'
 
-const PREVIEW_PIPELINE_VERSION = 3
+export const PREVIEW_PIPELINE_VERSION = 4
 
 export interface AssetPreviewResult {
   thumbnailPath: string
@@ -105,14 +105,27 @@ async function renderWaveform(asset: AssetSummary, outputPath: string): Promise<
     '-i',
     asset.filePath,
     '-filter_complex',
-    'aformat=channel_layouts=mono,showwavespic=s=640x360:colors=0x55c2ff,format=rgba,colorchannelmixer=aa=0.9',
+    'aformat=channel_layouts=mono,showwavespic=s=640x360:colors=0xECECEA,format=rgba,colorchannelmixer=aa=0.9',
     '-frames:v',
     '1',
     outputPath
   ])
 }
 
-function previewCacheKey(asset: AssetSummary): string {
+async function renderSpectrogram(asset: AssetSummary, outputPath: string): Promise<void> {
+  await runFfmpeg([
+    '-y',
+    '-i',
+    asset.filePath,
+    '-filter_complex',
+    'aformat=channel_layouts=mono,showspectrumpic=s=640x360:legend=disabled:color=fiery:scale=log',
+    '-frames:v',
+    '1',
+    outputPath
+  ])
+}
+
+export function previewCacheKey(asset: AssetSummary): string {
   const normalizedPath =
     process.platform === 'win32' ? asset.filePath.toLocaleLowerCase('en-US') : asset.filePath
   return createHash('sha256')
@@ -124,11 +137,22 @@ function previewCacheKey(asset: AssetSummary): string {
     .update('\0')
     .update(asset.kind)
     .update('\0')
+    .update(asset.mediaType)
+    .update('\0')
     .update(asset.overlayMode)
     .update('\0')
     .update(String(PREVIEW_PIPELINE_VERSION))
     .digest('hex')
     .slice(0, 24)
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function renderWebpThumbnail(previewPath: string, thumbnailPath: string): Promise<void> {
@@ -191,17 +215,25 @@ export async function generateAssetPreview(
   const cacheKey = previewCacheKey(asset)
   if (asset.mediaType === 'audio') {
     const waveformPath = join(previewCacheDir, `${asset.id}-${cacheKey}-waveform.webp`)
+    const spectrogramPath = join(previewCacheDir, `${asset.id}-${cacheKey}-spectrogram.webp`)
+    let thumbnailPath = waveformPath
     try {
-      await renderWaveform(asset, waveformPath)
+      if (!(await pathExists(waveformPath))) await renderWaveform(asset, waveformPath)
       await access(waveformPath)
-      return { thumbnailPath: waveformPath, previewPath: null }
     } catch {
-      const fallback = await writePlaceholderThumbnail(
+      thumbnailPath = await writePlaceholderThumbnail(
         join(previewCacheDir, `${asset.id}-${cacheKey}-waveform.jpg`),
         asset.displayName
       )
-      return { thumbnailPath: fallback, previewPath: null }
     }
+    let previewPath: string | null = spectrogramPath
+    try {
+      if (!(await pathExists(spectrogramPath))) await renderSpectrogram(asset, spectrogramPath)
+      await access(spectrogramPath)
+    } catch {
+      previewPath = null
+    }
+    return { thumbnailPath, previewPath }
   }
 
   const previewPath = join(previewCacheDir, `${asset.id}-${cacheKey}-preview.mp4`)

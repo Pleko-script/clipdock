@@ -1,5 +1,6 @@
 @import './base.css';
 @import './trim.css';
+@import './audio.css';
 
 .asset-app {
   display: grid;

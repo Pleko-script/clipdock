@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -32,6 +33,12 @@ import {
   assetIsPortrait,
   type AssetDragReadiness
 } from '../assetReadiness'
+import {
+  AUDIO_PREVIEW_VOLUME_KEY,
+  claimAudioPreview,
+  onOtherAudioPreview,
+  storedPreviewVolume
+} from '../audioPreview'
 import { useI18n } from '../i18n'
 import {
   AUDIO_HOVER_DELAY_MS,
@@ -90,6 +97,8 @@ function AssetCard({
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seekFrame = useRef<number | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const playerId = `${asset.id}:card:${useId()}`
   const onPreviewRef = useRef(onPreview)
   const scrubRatioRef = useRef(0.5)
   const [warming, setWarming] = useState(false)
@@ -104,6 +113,15 @@ function AssetCard({
   useEffect(() => {
     onPreviewRef.current = onPreview
   }, [onPreview])
+
+  useEffect(
+    () =>
+      onOtherAudioPreview(playerId, () => {
+        audioRef.current?.pause()
+        onPreviewRef.current(false)
+      }),
+    [playerId]
+  )
 
   const seekPreview = (ratio: number): void => {
     const video = videoRef.current
@@ -221,7 +239,18 @@ function AssetCard({
           <span className="asset-scrub-position" style={{ left: `${scrubRatio * 100}%` }} />
         ) : null}
         {previewing && asset.mediaType === 'audio' ? (
-          <audio src={asset.mediaUrl} autoPlay onEnded={() => onPreview(false)} />
+          <audio
+            ref={audioRef}
+            src={asset.mediaUrl}
+            autoPlay
+            onLoadedMetadata={(event) => {
+              event.currentTarget.volume = storedPreviewVolume(
+                window.localStorage.getItem(AUDIO_PREVIEW_VOLUME_KEY)
+              )
+            }}
+            onPlay={() => claimAudioPreview(playerId)}
+            onEnded={() => onPreview(false)}
+          />
         ) : null}
         <div className="asset-card-topline">
           {asset.kind !== 'unknown' ? (

@@ -47,6 +47,8 @@ interface SeedAsset {
   trimStartMs?: number | null
   trimEndMs?: number | null
   trimStatus?: 'none' | 'pending' | 'ready' | 'failed'
+  thumbnailPath?: string | null
+  previewPath?: string | null
 }
 
 function generateVideo(filePath: string, width: number, height: number): void {
@@ -89,6 +91,27 @@ function generateAudio(filePath: string): void {
   if (result.status !== 0) throw new Error(result.stderr)
 }
 
+function generateAudioArtwork(
+  audioPath: string,
+  waveformPath: string,
+  spectrogramPath: string
+): void {
+  for (const [outputPath, filter] of [
+    [waveformPath, 'aformat=channel_layouts=mono,showwavespic=s=640x360:colors=0xECECEA'],
+    [
+      spectrogramPath,
+      'aformat=channel_layouts=mono,showspectrumpic=s=640x360:legend=disabled:color=fiery:scale=log'
+    ]
+  ]) {
+    const result = spawnSync(
+      ffmpegPath,
+      ['-y', '-i', audioPath, '-filter_complex', filter, '-frames:v', '1', outputPath],
+      { encoding: 'utf8' }
+    )
+    if (result.status !== 0) throw new Error(result.stderr)
+  }
+}
+
 async function launch(profilePath: string): Promise<{ app: ElectronApplication; page: Page }> {
   const launched = await electron.launch({
     args: [projectRoot, `--user-data-dir=${profilePath}`]
@@ -122,9 +145,9 @@ function seedAssets(databaseFile: string, packRoot: string, assets: SeedAsset[])
        extension, kind, media_type, overlay_mode, compatibility, size_bytes, modified_at_ms,
        duration_ms, width_pixels, height_pixels, fps, codec, audio_codec, channels, has_alpha,
        favorite, note, status, preview_status, trim_start_ms, trim_end_ms, rotation_degrees,
-       trim_status, created_at_ms, updated_at_ms)
+       trim_status, thumbnail_path, preview_path, created_at_ms, updated_at_ms)
      VALUES (?, 'visual-pack', ?, '', ?, ?, ?, ?, ?, ?, 'raw', ?, ?, ?, 3000, ?, ?, ?, ?, ?, ?, ?,
-       0, '', ?, ?, ?, ?, 0, ?, ?, ?)`
+       0, '', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
   )
   for (const asset of assets) {
     const mediaType = asset.mediaType ?? 'video'
@@ -152,6 +175,8 @@ function seedAssets(databaseFile: string, packRoot: string, assets: SeedAsset[])
       asset.trimStartMs ?? null,
       asset.trimEndMs ?? null,
       asset.trimStatus ?? 'none',
+      asset.thumbnailPath ?? null,
+      asset.previewPath ?? null,
       timestamp,
       timestamp
     )
@@ -181,6 +206,8 @@ test.beforeAll(async () => {
   const failedEdit = join(packRoot, 'Failed Edit.mp4')
   const unsupported = join(packRoot, 'Unsupported.mp4')
   const sound = join(packRoot, 'Sound.wav')
+  const waveform = join(packRoot, 'Sound-waveform.webp')
+  const spectrogram = join(packRoot, 'Sound-spectrogram.webp')
   const missing = join(packRoot, 'Missing.mp4')
   generateVideo(landscape, 640, 360)
   generateVideo(portrait, 360, 640)
@@ -190,6 +217,7 @@ test.beforeAll(async () => {
   generateVideo(failedEdit, 640, 360)
   generateVideo(unsupported, 640, 360)
   generateAudio(sound)
+  generateAudioArtwork(sound, waveform, spectrogram)
 
   const bootstrap = await launch(profilePath)
   await expect(bootstrap.page).toHaveTitle('ClipDock')
@@ -245,7 +273,9 @@ test.beforeAll(async () => {
       displayName: 'Sound.wav',
       filePath: sound,
       mediaType: 'audio',
-      kind: 'sound'
+      kind: 'sound',
+      thumbnailPath: waveform,
+      previewPath: spectrogram
     },
     {
       id: 'visual-missing',
@@ -341,6 +371,60 @@ test('portrait and landscape media remain contained at target resolutions', asyn
       })
     }
   }
+})
+
+test('audio waveform scrubs, loops, switches view, and owns playback', async () => {
+  await page.setViewportSize(viewports[0])
+  const card = page.locator('.asset-card').filter({ hasText: 'Sound.wav' })
+  await card.scrollIntoViewIfNeeded()
+  await card.click()
+
+  const editor = page.locator('.asset-inspector .audio-preview-editor')
+  const slider = editor.locator('.audio-waveform')
+  await expect(editor).toBeVisible()
+  await expect(slider.locator('img')).toHaveAttribute('src', /\/thumbnail\//)
+
+  const bounds = await slider.boundingBox()
+  expect(bounds).not.toBeNull()
+  await slider.click({ position: { x: bounds!.width * 0.25, y: bounds!.height / 2 } })
+  await expect
+    .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
+    .toBeGreaterThan(650)
+  await slider.press('i')
+  await slider.click({ position: { x: bounds!.width * 0.75, y: bounds!.height / 2 } })
+  await slider.press('o')
+  await editor.locator('[aria-keyshortcuts="L"]').click()
+  await expect(editor.locator('[aria-keyshortcuts="L"]')).toHaveAttribute('aria-pressed', 'true')
+
+  const volume = editor.locator('input[type="range"]')
+  await volume.fill('0.4')
+  await expect
+    .poll(() => page.evaluate(() => window.localStorage.getItem('clipdock.previewVolume')))
+    .toBe('0.4')
+
+  await editor.locator('header button').nth(1).click()
+  await expect(slider.locator('img')).toHaveAttribute('src', /\/preview\//)
+  const layout = await editor.evaluate((element) => {
+    const inspectorBounds = element.closest('.asset-inspector')?.getBoundingClientRect()
+    const bounds = element.getBoundingClientRect()
+    return {
+      withinInspector:
+        Boolean(inspectorBounds) &&
+        bounds.top >= inspectorBounds!.top &&
+        bounds.bottom <= inspectorBounds!.bottom
+    }
+  })
+  expect(layout.withinInspector).toBe(true)
+
+  await editor.locator('.audio-transport > button').first().click()
+  await expect.poll(() => editor.locator('audio').evaluate((audio) => !audio.paused)).toBe(true)
+  await card.dblclick()
+  const quickLook = page.locator('.quick-look .audio-preview-editor')
+  await expect(quickLook).toBeVisible()
+  await expect.poll(() => editor.locator('audio').evaluate((audio) => audio.paused)).toBe(true)
+  await expect.poll(() => quickLook.locator('audio').evaluate((audio) => !audio.paused)).toBe(true)
+  await page.screenshot({ path: test.info().outputPath('audio-spectrogram-1280x720.png') })
+  await page.keyboard.press('Escape')
 })
 
 test('actionable card and filtered-empty states expose recovery', async () => {

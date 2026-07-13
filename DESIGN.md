@@ -82,6 +82,15 @@ Notes are not part of the current UI. Pack, codec, size, resolution, compatibili
 - Opaque ranges use high-quality H.264 MP4. Alpha ranges use ProRes 4444 MOV.
 - A prepared edit is dragged instead of the original; Reset restores original-file drag behavior.
 
+## Audio preview
+
+- Sounds use a responsive, cached waveform as the default selected-asset preview. A cached spectrogram is available as an optional view over the same transport.
+- Clicking or dragging across either view seeks the source audio; the playhead and timecode remain synchronized.
+- In and Out define a non-destructive audition loop. `I`, `O`, and `L` set its boundaries and toggle it; Space controls playback while the waveform has focus.
+- Arrow keys seek by one percent, Shift+Arrow by five seconds, and Home/End move to the source boundaries.
+- Preview volume persists across cards, the inspector, and Quick Look. Starting any sound preview stops the previous sound so only one is audible.
+- Waveform and spectrogram cache names include source identity and preview-pipeline version, allowing source changes and renderer updates to create fresh artifacts.
+
 ## Language
 
 - Every visible workflow string is centralized in `i18n.tsx`.

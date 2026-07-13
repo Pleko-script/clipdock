@@ -29,6 +29,7 @@ import {
 import { assetDragReadiness } from '../assetReadiness'
 import { useI18n } from '../i18n'
 import { AssetTrimEditor } from './AssetTrimEditor'
+import { AudioPreviewEditor } from './AudioPreviewEditor'
 import { PanelResizeHandle } from './PanelResizeHandle'
 
 function bytes(value: number): string {
@@ -232,7 +233,10 @@ export function AssetInspector({
         />
 
         <div className="asset-editor-primary">
-          {assets.length === 1 && (primary.mediaType !== 'video' || !primary.durationMs) ? (
+          {assets.length === 1 && primary.mediaType === 'audio' ? (
+            <AudioPreviewEditor asset={primary} playerId={`${primary.id}:inspector`} />
+          ) : null}
+          {assets.length === 1 && primary.mediaType !== 'audio' && !primary.durationMs ? (
             <div className="inspector-preview">
               {primary.posterUrl || primary.thumbnailUrl ? (
                 <img src={primary.posterUrl ?? primary.thumbnailUrl ?? undefined} alt="" />

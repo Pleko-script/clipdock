@@ -9,6 +9,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync
 } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -34,13 +35,15 @@ const grid = read('src/renderer/src/components/AssetGrid.tsx')
 const filterUi = read('src/renderer/src/components/AssetFilters.tsx')
 const inspector = read('src/renderer/src/components/AssetInspector.tsx')
 const trimEditor = read('src/renderer/src/components/AssetTrimEditor.tsx')
+const audioEditor = read('src/renderer/src/components/AudioPreviewEditor.tsx')
 const panelResizeHandle = read('src/renderer/src/components/PanelResizeHandle.tsx')
 const sidebar = read('src/renderer/src/components/AssetSidebar.tsx')
 const i18n = read('src/renderer/src/i18n.tsx')
 const rendererCss = [
   read('src/renderer/src/assets/base.css'),
   read('src/renderer/src/assets/main.css'),
-  read('src/renderer/src/assets/trim.css')
+  read('src/renderer/src/assets/trim.css'),
+  read('src/renderer/src/assets/audio.css')
 ].join('\n')
 const html = read('src/renderer/index.html')
 
@@ -93,7 +96,8 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/shared/assetFilters.ts'),
         join(projectRoot, 'src/renderer/src/previewScrub.ts'),
         join(projectRoot, 'src/renderer/src/editorPanelLayout.ts'),
-        join(projectRoot, 'src/renderer/src/assetReadiness.ts')
+        join(projectRoot, 'src/renderer/src/assetReadiness.ts'),
+        join(projectRoot, 'src/renderer/src/audioPreview.ts')
       ]
     })
   )
@@ -116,7 +120,8 @@ function compileRuntimeModules() {
     probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js')),
     scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js')),
     editorLayout: requireCompiled(join(outDir, 'src/renderer/src/editorPanelLayout.js')),
-    readiness: requireCompiled(join(outDir, 'src/renderer/src/assetReadiness.js'))
+    readiness: requireCompiled(join(outDir, 'src/renderer/src/assetReadiness.js')),
+    audioPreview: requireCompiled(join(outDir, 'src/renderer/src/audioPreview.js'))
   }
 }
 
@@ -943,7 +948,15 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
     assert.match(transitionPreview.thumbnailPath, /\.webp$/)
     assert.ok(existsSync(transitionPreview.previewPath))
     assert.ok(existsSync(soundPreview.thumbnailPath))
-    assert.equal(soundPreview.previewPath, null)
+    assert.match(soundPreview.thumbnailPath, /-waveform\.webp$/)
+    assert.match(soundPreview.previewPath, /-spectrogram\.webp$/)
+    assert.ok(existsSync(soundPreview.previewPath))
+    const waveformModifiedAt = statSync(soundPreview.thumbnailPath).mtimeMs
+    const spectrogramModifiedAt = statSync(soundPreview.previewPath).mtimeMs
+    const cachedSoundPreview = await runtime.preview.generateAssetPreview(sound, previewDir)
+    assert.deepEqual(cachedSoundPreview, soundPreview)
+    assert.equal(statSync(cachedSoundPreview.thumbnailPath).mtimeMs, waveformModifiedAt)
+    assert.equal(statSync(cachedSoundPreview.previewPath).mtimeMs, spectrogramModifiedAt)
     assert.match(posterPath, /-poster-250\.webp$/)
     assert.equal(existsSync(posterPath), true)
     assert.equal(
@@ -1260,7 +1273,9 @@ test('package, docs, and preview pipeline describe the shipped system', () => {
   assert.match(schema, /BEGIN IMMEDIATE/)
   assert.match(schema, /rotation_degrees=0 WHERE rotation_degrees IS NULL/)
   assert.match(storeSource, /private transaction/)
-  assert.match(preview, /PREVIEW_PIPELINE_VERSION = 3/)
+  assert.match(preview, /PREVIEW_PIPELINE_VERSION = 4/)
+  assert.match(preview, /showspectrumpic/)
+  assert.match(preview, /previewCacheKey/)
   assert.match(preview, /color=black@0/)
   assert.match(trim, /prores_ks/)
   assert.match(trim, /libx264/)
@@ -1276,4 +1291,27 @@ test('package, docs, and preview pipeline describe the shipped system', () => {
   assert.match(rendererCss, /\.trim-media-stage video[\s\S]*object-fit:\s*contain/)
   assert.match(rendererCss, /\.asset-editor-layout[\s\S]*grid-template-columns:/)
   assert.match(rendererCss, /\.asset-inspector[\s\S]*overflow:\s*hidden/)
+  assert.match(audioEditor, /role="slider"/)
+  assert.match(audioEditor, /onPointerMove/)
+  assert.match(audioEditor, /aria-keyshortcuts="Space ArrowLeft ArrowRight Home End I O L"/)
+  assert.match(audioEditor, /claimAudioPreview/)
+  assert.match(audioEditor, /onOtherAudioPreview/)
+  assert.match(rendererCss, /\.audio-waveform[\s\S]*height:\s*clamp/)
+})
+
+test('audio preview seeking, loops, and volume remain bounded', () => {
+  assert.equal(runtime.audioPreview.audioTimeFromPointer(150, 100, 100, 10_000), 5_000)
+  assert.equal(runtime.audioPreview.audioTimeFromPointer(50, 100, 100, 10_000), 0)
+  assert.equal(runtime.audioPreview.audioTimeFromPointer(250, 100, 100, 10_000), 10_000)
+  assert.equal(runtime.audioPreview.clampAudioTime(500, Number.POSITIVE_INFINITY), 0)
+  assert.deepEqual(runtime.audioPreview.normalizeAudioLoop(900, 910, 1_000), {
+    startMs: 900,
+    endMs: 950
+  })
+  assert.equal(runtime.audioPreview.loopedAudioTime(949, { startMs: 100, endMs: 950 }, true), null)
+  assert.equal(runtime.audioPreview.loopedAudioTime(950, { startMs: 100, endMs: 950 }, true), 100)
+  assert.equal(runtime.audioPreview.loopedAudioTime(950, { startMs: 100, endMs: 950 }, false), null)
+  assert.equal(runtime.audioPreview.storedPreviewVolume('0.4'), 0.4)
+  assert.equal(runtime.audioPreview.storedPreviewVolume('2'), 0.75)
+  assert.equal(runtime.audioPreview.storedPreviewVolume(null), 0.75)
 })
