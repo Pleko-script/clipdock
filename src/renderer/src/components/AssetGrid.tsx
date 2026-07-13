@@ -17,6 +17,8 @@ import {
   Film,
   Heart,
   Layers3,
+  ListPlus,
+  ListX,
   Link2,
   LoaderCircle,
   RectangleVertical,
@@ -79,7 +81,10 @@ function AssetCard({
   onPreview,
   onFavorite,
   onRelink,
-  onRetryPreview
+  onRetryPreview,
+  shortlisted,
+  shortlistFull,
+  onToggleShortlist
 }: {
   asset: AssetSummary
   selected: boolean
@@ -92,6 +97,9 @@ function AssetCard({
   onFavorite: () => void
   onRelink: () => void
   onRetryPreview: () => void
+  shortlisted: boolean
+  shortlistFull: boolean
+  onToggleShortlist: () => void
 }): JSX.Element {
   const { kind, t } = useI18n()
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -258,17 +266,35 @@ function AssetCard({
           ) : (
             <span />
           )}
-          <button
-            type="button"
-            className={`favorite-icon${asset.favorite ? ' active' : ''}`}
-            aria-label={asset.favorite ? t('grid.removeFavorite') : t('grid.addFavorite')}
-            onClick={(event) => {
-              event.stopPropagation()
-              onFavorite()
-            }}
-          >
-            <Heart size={16} fill={asset.favorite ? 'currentColor' : 'none'} />
-          </button>
+          <div className="asset-card-actions">
+            <button
+              type="button"
+              className={`compare-icon${shortlisted ? ' active' : ''}`}
+              disabled={shortlistFull && !shortlisted}
+              title={shortlistFull && !shortlisted ? t('compare.limitReached') : undefined}
+              aria-label={t(
+                shortlisted ? 'compare.removeFromShortlist' : 'compare.addToShortlist',
+                { name: asset.displayName }
+              )}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleShortlist()
+              }}
+            >
+              {shortlisted ? <ListX size={14} /> : <ListPlus size={14} />}
+            </button>
+            <button
+              type="button"
+              className={`favorite-icon${asset.favorite ? ' active' : ''}`}
+              aria-label={asset.favorite ? t('grid.removeFavorite') : t('grid.addFavorite')}
+              onClick={(event) => {
+                event.stopPropagation()
+                onFavorite()
+              }}
+            >
+              <Heart size={16} fill={asset.favorite ? 'currentColor' : 'none'} />
+            </button>
+          </div>
         </div>
         <div className="asset-card-badges">
           <span
@@ -353,6 +379,9 @@ export function AssetGrid({
   onFavorite,
   onRelink,
   onRetryPreview,
+  comparisonIds,
+  comparisonLimitReached,
+  onToggleComparison,
   filteredEmpty,
   onClearFilters
 }: {
@@ -366,6 +395,9 @@ export function AssetGrid({
   onFavorite: (asset: AssetSummary) => void
   onRelink: (asset: AssetSummary) => void
   onRetryPreview: (asset: AssetSummary) => void
+  comparisonIds: Set<string>
+  comparisonLimitReached: boolean
+  onToggleComparison: (asset: AssetSummary) => void
   filteredEmpty: boolean
   onClearFilters: () => void
 }): JSX.Element {
@@ -440,6 +472,9 @@ export function AssetGrid({
                 onFavorite={() => onFavorite(asset)}
                 onRelink={() => onRelink(asset)}
                 onRetryPreview={() => onRetryPreview(asset)}
+                shortlisted={comparisonIds.has(asset.id)}
+                shortlistFull={comparisonLimitReached}
+                onToggleShortlist={() => onToggleComparison(asset)}
                 onPreview={(previewing) =>
                   setPreviewIds((current) =>
                     nextPreviewIds(current, asset.id, previewing, (id) => mediaTypes.get(id))

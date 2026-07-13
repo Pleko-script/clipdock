@@ -359,6 +359,83 @@ test('related SFX search can switch to exact mode in either language', async () 
   await search.fill('')
 })
 
+test('temporary comparison tray orders, auditions, limits, collapses, and clears', async () => {
+  await page.setViewportSize(viewports[0])
+  const tray = page.locator('.comparison-tray')
+  const add = async (name: string): Promise<void> => {
+    if ((await tray.count()) && !(await tray.getAttribute('class'))?.includes('collapsed'))
+      await tray.locator('header button').last().click()
+    const card = page.locator('.asset-card').filter({ hasText: name })
+    await card.scrollIntoViewIfNeeded()
+    await card.hover({ force: true })
+    await card.locator('.compare-icon').click({ force: true })
+  }
+
+  await add('Whoosh Sound.wav')
+  await add('Landscape.mp4')
+  await expect(tray).toBeVisible()
+  await expect(tray.locator('.comparison-count')).toHaveText('2 / 6')
+  await expect(tray.locator('.comparison-candidates strong')).toHaveText([
+    'Whoosh Sound.wav',
+    'Landscape.mp4'
+  ])
+
+  await tray
+    .locator('.comparison-candidates > div')
+    .filter({ hasText: 'Whoosh Sound.wav' })
+    .locator('button')
+    .first()
+    .click()
+  await expect(tray.locator('.comparison-media audio')).toHaveCount(1)
+  await tray.locator('.comparison-transport button').nth(1).click()
+  await expect.poll(() => tray.locator('audio').evaluate((audio) => !audio.paused)).toBe(true)
+
+  await tray.locator('.comparison-transport button').first().click()
+  await expect(tray.locator('.comparison-media video')).toHaveCount(1)
+  await expect.poll(() => tray.locator('video').evaluate((video) => !video.paused)).toBe(true)
+  await tray.focus()
+  await tray.press('ArrowRight')
+  await expect(tray.locator('.comparison-media audio')).toHaveCount(1)
+
+  const gridHeight = await page.locator('.asset-grid-scroll').evaluate((grid) => grid.clientHeight)
+  await tray.locator('header button').last().click()
+  await expect(tray).toHaveClass(/collapsed/)
+  await expect(tray.locator('audio, video')).toHaveCount(0)
+  expect(await page.locator('.asset-grid-scroll').evaluate((grid) => grid.clientHeight)).toBe(
+    gridHeight
+  )
+  await tray.locator('header button').last().click()
+
+  await tray
+    .locator('.comparison-candidates > div')
+    .filter({ hasText: 'Landscape.mp4' })
+    .locator('button')
+    .last()
+    .click()
+  for (const name of [
+    'Alpha.mov',
+    'Failed Edit.mp4',
+    'Missing.mp4',
+    'Portrait.mp4',
+    'Preparing.mp4'
+  ])
+    await add(name)
+  await expect(tray.locator('.comparison-count')).toHaveText('6 / 6')
+  const rejected = page.locator('.asset-card').filter({ hasText: 'Preview Failed.mp4' })
+  await rejected.scrollIntoViewIfNeeded()
+  await expect(rejected.locator('.compare-icon')).toBeDisabled()
+
+  await page.screenshot({ path: test.info().outputPath('comparison-tray-1280x720.png') })
+  await tray.locator('header button').first().click()
+  await expect(tray).toHaveCount(0)
+
+  const alpha = page.locator('.asset-card').filter({ hasText: 'Alpha.mov' })
+  const portrait = page.locator('.asset-card').filter({ hasText: 'Portrait.mp4' })
+  await alpha.click()
+  await portrait.click({ modifiers: ['Control'] })
+  await expect(page.locator('.asset-results-bar strong')).toContainText('2')
+})
+
 test('portrait and landscape media remain contained at target resolutions', async () => {
   const testInfo = test.info()
   for (const viewport of viewports) {

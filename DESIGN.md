@@ -54,6 +54,7 @@ Both families are bundled locally. The UI never requires a network connection.
 - Editor columns: Organize on the left, media/range in the center, and file details on the right.
 - Editor side panels: 220 px by default, independently resizable from 140 to 320 px, and independently collapsible to 36 px. Widths and collapse choices persist locally. Below 900 px of editor space, File details collapses automatically; below 720 px, both side panels collapse until more space is available.
 - Grid: all remaining space below the editor, row-virtualized with 14 px gaps.
+- Comparison tray: session-only overlay above the status bar; at most six ordered candidates, collapsible without changing grid measurements.
 - Application minimum: 900 × 600 px.
 
 The editor hierarchy is fixed:
@@ -134,6 +135,8 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - `F` toggles favorite.
 - `Ctrl/Cmd+A`, Shift-click, and Ctrl/Cmd-click provide multi-selection.
 - `+` and `-` adjust thumbnail density.
+- Card comparison actions add or remove a candidate without changing selection. When the comparison tray itself is focused, Left/Right moves between candidates and Space toggles playback.
+- The active comparison candidate uses its contextual video proxy or waveform-backed source audio and can be dragged through the existing prepared-derivative path. Clear unmounts every tray media element.
 - Native drag contains original paths or prepared edit paths where configured.
 - Dropping on a Collection adds references and never moves source files.
 - Saving a Smart Collection stores stable search, scope, filter, and sort keys; opening it evaluates those criteria against current asset data.

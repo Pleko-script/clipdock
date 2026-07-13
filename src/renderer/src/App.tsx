@@ -39,7 +39,13 @@ import { AssetGrid } from './components/AssetGrid'
 import { AssetFilterChips, AssetFilterPopover } from './components/AssetFilters'
 import { AssetInspector } from './components/AssetInspector'
 import { AssetSidebar } from './components/AssetSidebar'
+import { ComparisonTray } from './components/ComparisonTray'
 import { QuickLook } from './components/QuickLook'
+import {
+  addComparisonCandidate,
+  COMPARISON_SHORTLIST_LIMIT,
+  removeComparisonCandidate
+} from './comparisonShortlist'
 import { useI18n } from './i18n'
 
 const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
@@ -118,6 +124,9 @@ function App(): JSX.Element {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeId, setActiveId] = useState<string | null>(null)
   const [quickLookId, setQuickLookId] = useState<string | null>(null)
+  const [comparisonAssets, setComparisonAssets] = useState<AssetSummary[]>([])
+  const [comparisonActiveId, setComparisonActiveId] = useState<string | null>(null)
+  const [comparisonCollapsed, setComparisonCollapsed] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
@@ -168,6 +177,10 @@ function App(): JSX.Element {
   )
   const activeAsset = assets.find((asset) => asset.id === activeId) ?? null
   const quickLookAsset = assets.find((asset) => asset.id === quickLookId) ?? null
+  const comparisonIds = useMemo(
+    () => new Set(comparisonAssets.map((asset) => asset.id)),
+    [comparisonAssets]
+  )
 
   const loadNavigation = useCallback(async (): Promise<void> => {
     const result = await window.clipdock.getNavigationSnapshot()
@@ -407,6 +420,44 @@ function App(): JSX.Element {
     event.preventDefault()
     event.dataTransfer.setData('application/x-clipdock-asset-ids', JSON.stringify(ids))
     window.clipdock.startAssetDrag({ assetIds: ids })
+  }
+
+  const dragComparisonAsset = (asset: AssetSummary, event: DragEvent<HTMLElement>): void => {
+    event.preventDefault()
+    event.dataTransfer.setData('application/x-clipdock-asset-ids', JSON.stringify([asset.id]))
+    window.clipdock.startAssetDrag({ assetIds: [asset.id] })
+  }
+
+  const removeComparisonAsset = (assetId: string): void => {
+    const index = comparisonAssets.findIndex((asset) => asset.id === assetId)
+    const remainingIds = removeComparisonCandidate(
+      comparisonAssets.map((asset) => asset.id),
+      assetId
+    )
+    const remaining = comparisonAssets.filter((asset) => remainingIds.includes(asset.id))
+    setComparisonAssets(remaining)
+    if (comparisonActiveId === assetId)
+      setComparisonActiveId(
+        remaining[Math.min(Math.max(0, index), remaining.length - 1)]?.id ?? null
+      )
+  }
+
+  const toggleComparisonAsset = (asset: AssetSummary): void => {
+    if (comparisonIds.has(asset.id)) {
+      removeComparisonAsset(asset.id)
+      return
+    }
+    const change = addComparisonCandidate(
+      comparisonAssets.map((candidate) => candidate.id),
+      asset.id
+    )
+    if (change.limitReached) {
+      showTransientStatus(t('compare.limitReached'))
+      return
+    }
+    setComparisonAssets((current) => [...current, asset])
+    setComparisonActiveId((current) => current ?? asset.id)
+    setComparisonCollapsed(false)
   }
 
   useEffect(() => {
@@ -722,6 +773,9 @@ function App(): JSX.Element {
           onFavorite={(asset) => void mutate((bridge) => bridge.toggleAssetFavorite(asset.id))}
           onRelink={(asset) => void mutate((bridge) => bridge.relinkPack(asset.packId))}
           onRetryPreview={(asset) => void mutate((bridge) => bridge.regeneratePreviews([asset.id]))}
+          comparisonIds={comparisonIds}
+          comparisonLimitReached={comparisonAssets.length >= COMPARISON_SHORTLIST_LIMIT}
+          onToggleComparison={toggleComparisonAsset}
           filteredEmpty={
             Boolean(search.trim()) ||
             countAssetFilters(filters) > 0 ||
@@ -729,6 +783,21 @@ function App(): JSX.Element {
           }
           onClearFilters={clearEmptyFilters}
         />
+        {comparisonAssets.length > 0 && comparisonActiveId ? (
+          <ComparisonTray
+            assets={comparisonAssets}
+            activeId={comparisonActiveId}
+            collapsed={comparisonCollapsed}
+            onActiveChange={setComparisonActiveId}
+            onRemove={removeComparisonAsset}
+            onClear={() => {
+              setComparisonAssets([])
+              setComparisonActiveId(null)
+            }}
+            onCollapsedChange={setComparisonCollapsed}
+            onDrag={dragComparisonAsset}
+          />
+        ) : null}
         {nextCursor ? (
           <button type="button" className="load-more" onClick={() => void loadAssets(true)}>
             {t('results.loadMore')}

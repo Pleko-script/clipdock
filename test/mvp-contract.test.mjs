@@ -37,6 +37,7 @@ const filterUi = read('src/renderer/src/components/AssetFilters.tsx')
 const inspector = read('src/renderer/src/components/AssetInspector.tsx')
 const trimEditor = read('src/renderer/src/components/AssetTrimEditor.tsx')
 const audioEditor = read('src/renderer/src/components/AudioPreviewEditor.tsx')
+const comparisonTray = read('src/renderer/src/components/ComparisonTray.tsx')
 const panelResizeHandle = read('src/renderer/src/components/PanelResizeHandle.tsx')
 const sidebar = read('src/renderer/src/components/AssetSidebar.tsx')
 const i18n = read('src/renderer/src/i18n.tsx')
@@ -45,7 +46,8 @@ const rendererCss = [
   read('src/renderer/src/assets/base.css'),
   read('src/renderer/src/assets/main.css'),
   read('src/renderer/src/assets/trim.css'),
-  read('src/renderer/src/assets/audio.css')
+  read('src/renderer/src/assets/audio.css'),
+  read('src/renderer/src/assets/comparison.css')
 ].join('\n')
 const html = read('src/renderer/index.html')
 
@@ -100,7 +102,8 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/renderer/src/previewScrub.ts'),
         join(projectRoot, 'src/renderer/src/editorPanelLayout.ts'),
         join(projectRoot, 'src/renderer/src/assetReadiness.ts'),
-        join(projectRoot, 'src/renderer/src/audioPreview.ts')
+        join(projectRoot, 'src/renderer/src/audioPreview.ts'),
+        join(projectRoot, 'src/renderer/src/comparisonShortlist.ts')
       ]
     })
   )
@@ -125,6 +128,7 @@ function compileRuntimeModules() {
     editorLayout: requireCompiled(join(outDir, 'src/renderer/src/editorPanelLayout.js')),
     readiness: requireCompiled(join(outDir, 'src/renderer/src/assetReadiness.js')),
     audioPreview: requireCompiled(join(outDir, 'src/renderer/src/audioPreview.js')),
+    comparison: requireCompiled(join(outDir, 'src/renderer/src/comparisonShortlist.js')),
     synonyms: requireCompiled(join(outDir, 'src/shared/sfxSynonyms.js'))
   }
 }
@@ -1398,6 +1402,13 @@ test('package, docs, and preview pipeline describe the shipped system', () => {
   assert.match(audioEditor, /claimAudioPreview/)
   assert.match(audioEditor, /onOtherAudioPreview/)
   assert.match(rendererCss, /\.audio-waveform[\s\S]*height:\s*clamp/)
+  assert.match(comparisonTray, /draggable=\{assetCanDrag\(active\)\}/)
+  assert.match(comparisonTray, /active\.previewUrl \?\? active\.mediaUrl/)
+  assert.match(comparisonTray, /onOtherAudioPreview\('comparison-tray'/)
+  assert.match(comparisonTray, /aria-keyshortcuts="ArrowLeft ArrowRight Space"/)
+  assert.match(app, /comparisonAssets\.length > 0/)
+  assert.match(app, /startAssetDrag\(\{ assetIds: \[asset\.id\] \}\)/)
+  assert.match(rendererCss, /\.comparison-tray[\s\S]*position:\s*absolute/)
 })
 
 test('audio preview seeking, loops, and volume remain bounded', () => {
@@ -1415,4 +1426,25 @@ test('audio preview seeking, loops, and volume remain bounded', () => {
   assert.equal(runtime.audioPreview.storedPreviewVolume('0.4'), 0.4)
   assert.equal(runtime.audioPreview.storedPreviewVolume('2'), 0.75)
   assert.equal(runtime.audioPreview.storedPreviewVolume(null), 0.75)
+})
+
+test('comparison shortlist preserves order, enforces its limit, and wraps navigation', () => {
+  let ids = []
+  for (let index = 1; index <= 6; index += 1) {
+    const change = runtime.comparison.addComparisonCandidate(ids, `asset-${index}`)
+    assert.equal(change.added, true)
+    assert.equal(change.limitReached, false)
+    ids = change.ids
+  }
+  assert.deepEqual(ids, ['asset-1', 'asset-2', 'asset-3', 'asset-4', 'asset-5', 'asset-6'])
+  assert.deepEqual(runtime.comparison.addComparisonCandidate(ids, 'asset-2'), {
+    ids,
+    added: false,
+    limitReached: false
+  })
+  assert.equal(runtime.comparison.addComparisonCandidate(ids, 'asset-7').limitReached, true)
+  const removed = runtime.comparison.removeComparisonCandidate(ids, 'asset-3')
+  assert.deepEqual(removed, ['asset-1', 'asset-2', 'asset-4', 'asset-5', 'asset-6'])
+  assert.equal(runtime.comparison.adjacentComparisonCandidate(removed, 'asset-1', -1), 'asset-6')
+  assert.equal(runtime.comparison.adjacentComparisonCandidate(removed, 'asset-6', 1), 'asset-1')
 })

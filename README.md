@@ -39,6 +39,7 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 | **Preview**  | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.                |
 | **Find**     | Bilingual SFX search        | Expands reviewed German/English sound terms locally, offers exact-only mode, and reads available UCS fields. |
 | **Reuse**    | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                      |
+| **Compare**  | Temporary shortlist         | Auditions up to six candidates in order without creating or changing a permanent Collection.                 |
 | **Organize** | Collections and saved views | Groups assets manually or saves the current search, scope, filters, and sort as a dynamic Smart Collection.  |
 | **Classify** | Automatic asset detection   | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.             |
 | **Inspect**  | Media metadata              | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.       |
@@ -60,6 +61,8 @@ Choose **Add Pack** and select a folder containing effects. The selected folder 
 ### 2. Find and preview
 
 ClipDock scans supported media, stores metadata first, and generates previews in the background. While ClipDock is running, linked pack folders are watched for debounced additions, changes, moves, and removals; manual rescan remains available as a recovery action. Search expands a small, versioned German/English SFX dictionary such as `whoosh`, `swoosh`, and `Wusch`; the visible **Exact** switch disables that expansion. Available UCS CatID, category, and subcategory metadata participates in search and filtering without renaming source files. Save a useful result view as a Smart Collection to re-run the same criteria against the current library.
+
+Use the card comparison action to place up to six temporary candidates in the session-only comparison tray. The tray auditions contextual video previews or original sound playback in insertion order, collapses over the grid without changing its size, and drags the active candidate through the normal validated drag path. Clear removes the entire temporary shortlist; Collections and source files are unaffected.
 
 ### 3. Drag into the edit
 

@@ -1,6 +1,7 @@
 @import './base.css';
 @import './trim.css';
 @import './audio.css';
+@import './comparison.css';
 
 .asset-app {
   display: grid;
@@ -245,6 +246,7 @@
 }
 
 .asset-library {
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
