@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import {
   FolderSearch,
+  Link2,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -25,6 +26,7 @@ import {
   type EditorPanelLayout,
   type EditorPanelSide
 } from '../editorPanelLayout'
+import { assetDragReadiness } from '../assetReadiness'
 import { useI18n } from '../i18n'
 import { AssetTrimEditor } from './AssetTrimEditor'
 import { PanelResizeHandle } from './PanelResizeHandle'
@@ -47,7 +49,8 @@ export function AssetInspector({
   onSetTrim,
   onSetPoster,
   onReveal,
-  onRegenerate
+  onRegenerate,
+  onRelink
 }: {
   assets: AssetSummary[]
   onClose: () => void
@@ -56,6 +59,7 @@ export function AssetInspector({
   onSetPoster: (request: AssetPosterRequest) => Promise<ClipdockResult<void>>
   onReveal: (asset: AssetSummary) => void
   onRegenerate: (assets: AssetSummary[]) => void
+  onRelink: (asset: AssetSummary) => void
 }): JSX.Element {
   const { kind, t } = useI18n()
   const primary = assets[0]
@@ -91,6 +95,7 @@ export function AssetInspector({
     )
 
   const ids = assets.map((asset) => asset.id)
+  const readiness = assetDragReadiness(primary)
   const responsiveCollapse = responsivePanelCollapse(editorWidth)
   const organizeCollapsed = panelLayout.organizeCollapsed || responsiveCollapse.organize
   const detailsCollapsed = panelLayout.detailsCollapsed || responsiveCollapse.details
@@ -308,18 +313,36 @@ export function AssetInspector({
                     {t(`compat.${primary.compatibility}`)}
                   </dd>
                 </div>
+                <div>
+                  <dt>{t('inspector.dragReadiness')}</dt>
+                  <dd className={`readiness ${readiness}`}>{t(`readiness.${readiness}`)}</dd>
+                </div>
+                <div>
+                  <dt>{t('inspector.preview')}</dt>
+                  <dd className={`preview-status ${primary.previewStatus}`}>
+                    {t(`preview.${primary.previewStatus}`)}
+                  </dd>
+                </div>
               </dl>
               {primary.kind === 'overlay' && primary.overlayMode === 'screen' ? (
                 <p className="inspector-usage">{t('inspector.screenHint')}</p>
               ) : null}
               <div className="inspector-actions">
+                {primary.status === 'missing' ? (
+                  <button type="button" onClick={() => onRelink(primary)}>
+                    <Link2 size={15} />
+                    {t('grid.relinkPack')}
+                  </button>
+                ) : null}
                 <button type="button" onClick={() => onReveal(primary)}>
                   <FolderSearch size={15} />
                   {t('inspector.reveal')}
                 </button>
                 <button type="button" onClick={() => onRegenerate(assets)}>
                   <RefreshCw size={15} />
-                  {t('inspector.rebuild')}
+                  {t(
+                    primary.previewStatus === 'failed' ? 'grid.retryPreview' : 'inspector.rebuild'
+                  )}
                 </button>
               </div>
             </div>

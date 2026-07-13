@@ -11,6 +11,7 @@ import {
 import { Grid2X2, PanelTopOpen, RefreshCw, Search } from 'lucide-react'
 import {
   assetFiltersToQuery,
+  countAssetFilters,
   emptyAssetFilters,
   toggleAssetFilter
 } from '../../shared/assetFilters'
@@ -122,12 +123,28 @@ function App(): JSX.Element {
   const lastSelectedIndex = useRef<number | null>(null)
   const nextCursorRef = useRef<string | null>(null)
   const assetRequestRef = useRef(0)
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const kind: AssetKind | 'all' = filters.kinds.length === 1 ? filters.kinds[0] : 'all'
 
   const currentSmartCollectionCriteria = useMemo<AssetSmartCollectionCriteria>(
     () => ({ search, filters, scope, sort }),
     [filters, scope, search, sort]
   )
+
+  const showTransientStatus = useCallback((message: string): void => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    setStatus(message)
+    statusTimerRef.current = setTimeout(() => {
+      statusTimerRef.current = null
+      setStatus(null)
+    }, 4_000)
+  }, [])
+
+  const showPersistentStatus = useCallback((message: string | null): void => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    statusTimerRef.current = null
+    setStatus(message)
+  }, [])
 
   const query = useMemo<AssetQuery>(
     () => ({
@@ -150,8 +167,8 @@ function App(): JSX.Element {
   const loadNavigation = useCallback(async (): Promise<void> => {
     const result = await window.clipdock.getNavigationSnapshot()
     if (result.ok) setNavigation(result.value)
-    else setStatus(localizeError(result.error.message))
-  }, [localizeError])
+    else showPersistentStatus(localizeError(result.error.message))
+  }, [localizeError, showPersistentStatus])
 
   const loadAssets = useCallback(
     async (append = false, resetSelection = false): Promise<void> => {
@@ -162,7 +179,7 @@ function App(): JSX.Element {
       })
       if (requestId !== assetRequestRef.current) return
       if (!result.ok) {
-        setStatus(localizeError(result.error.message))
+        showPersistentStatus(localizeError(result.error.message))
         return
       }
       setAssets((current) => (append ? [...current, ...result.value.items] : result.value.items))
@@ -184,7 +201,7 @@ function App(): JSX.Element {
         }
       }
     },
-    [localizeError, query]
+    [localizeError, query, showPersistentStatus]
   )
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -196,8 +213,14 @@ function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [search])
   useEffect(() => {
-    queueMicrotask(() => setStatus(null))
-  }, [language])
+    queueMicrotask(() => showPersistentStatus(null))
+  }, [language, showPersistentStatus])
+  useEffect(
+    () => () => {
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    },
+    []
+  )
   useEffect(() => {
     let active = true
     queueMicrotask(() => {
@@ -232,19 +255,19 @@ function App(): JSX.Element {
         setJobProgress(t('app.previewProgress', { current: event.completed, total: event.total }))
       if (event.type === 'scan-completed' || event.type === 'preview-completed') scheduleRefresh()
       if (event.type === 'scan-completed') setJobProgress(null)
-      if (event.type === 'preview-failed') setStatus(localizeError(event.message))
+      if (event.type === 'preview-failed') showPersistentStatus(localizeError(event.message))
     })
     const offDrag = window.clipdock.onAssetDragEvent((event) => {
       const preparedCount = event.trimmedAssetIds?.length ?? 0
       const prepared = preparedCount ? t('app.preparedCount', { count: preparedCount }) : ''
-      setStatus(
-        event.type === 'drag-started'
-          ? t(event.assetIds.length === 1 ? 'app.draggedOne' : 'app.draggedMany', {
-              count: event.assetIds.length,
-              prepared
-            })
-          : localizeError(event.error?.message ?? t('app.dragFailed'))
-      )
+      if (event.type === 'drag-started')
+        showTransientStatus(
+          t(event.assetIds.length === 1 ? 'app.draggedOne' : 'app.draggedMany', {
+            count: event.assetIds.length,
+            prepared
+          })
+        )
+      else showPersistentStatus(localizeError(event.error?.message ?? t('app.dragFailed')))
       if (event.type === 'drag-started') scheduleRefresh()
     })
     return () => {
@@ -252,29 +275,29 @@ function App(): JSX.Element {
       offJobs()
       offDrag()
     }
-  }, [localizeError, refresh, t])
+  }, [localizeError, refresh, showPersistentStatus, showTransientStatus, t])
 
   const mutate = useCallback(
     async (operation: (bridge: ClipdockApi) => Promise<ClipdockResult<unknown>>): Promise<void> => {
       const result = await operation(window.clipdock)
-      if (!result.ok) setStatus(localizeError(result.error.message))
+      if (!result.ok) showPersistentStatus(localizeError(result.error.message))
       else await refresh()
     },
-    [localizeError, refresh]
+    [localizeError, refresh, showPersistentStatus]
   )
 
   const addPack = async (): Promise<void> => {
     setBusy(true)
-    setStatus(t('app.addingPack'))
+    showPersistentStatus(t('app.addingPack'))
     const result = await window.clipdock.addPackFolder()
     setBusy(false)
-    setStatus(
-      result.ok
-        ? t(result.value.importedAssets === 1 ? 'app.importedOne' : 'app.importedMany', {
-            count: result.value.importedAssets
-          })
-        : localizeError(result.error.message)
-    )
+    if (result.ok)
+      showTransientStatus(
+        t(result.value.importedAssets === 1 ? 'app.importedOne' : 'app.importedMany', {
+          count: result.value.importedAssets
+        })
+      )
+    else showPersistentStatus(localizeError(result.error.message))
     if (result.ok) {
       const alreadyShowingAll = scope.type === 'all'
       setActiveSmartCollectionId(null)
@@ -286,11 +309,12 @@ function App(): JSX.Element {
 
   const rescan = async (): Promise<void> => {
     setBusy(true)
-    setStatus(t('app.scanningPacks'))
+    showPersistentStatus(t('app.scanningPacks'))
     const result = await window.clipdock.rescanPacks(scope.type === 'pack' ? [scope.id] : undefined)
     setBusy(false)
     setJobProgress(null)
-    setStatus(result.ok ? t('app.scanComplete') : localizeError(result.error.message))
+    if (result.ok) showTransientStatus(t('app.scanComplete'))
+    else showPersistentStatus(localizeError(result.error.message))
     if (result.ok) await refresh()
   }
 
@@ -308,6 +332,12 @@ function App(): JSX.Element {
     setFilters(emptyAssetFilters())
   }, [])
 
+  const clearEmptyFilters = useCallback((): void => {
+    setSearch('')
+    setDebouncedSearch('')
+    clearFilters()
+  }, [clearFilters])
+
   const selectSmartCollection = useCallback((collection: AssetSmartCollectionSummary): void => {
     setSearch(collection.criteria.search)
     setDebouncedSearch(collection.criteria.search)
@@ -321,32 +351,27 @@ function App(): JSX.Element {
     async (request: AssetTrimRequest): Promise<ClipdockResult<void>> => {
       const resetting =
         request.startMs === null && request.endMs === null && request.rotationDegrees === 0
-      setStatus(t(resetting ? 'app.resettingEdit' : 'app.renderingEdit'))
+      showPersistentStatus(t(resetting ? 'app.resettingEdit' : 'app.renderingEdit'))
       const result = await window.clipdock.setAssetTrim(request)
-      setStatus(
-        result.ok
-          ? t(resetting ? 'app.editReset' : 'app.editReady')
-          : localizeError(result.error.message)
-      )
+      if (result.ok) showTransientStatus(t(resetting ? 'app.editReset' : 'app.editReady'))
+      else showPersistentStatus(localizeError(result.error.message))
       if (result.ok) await refresh()
       return result
     },
-    [localizeError, refresh, t]
+    [localizeError, refresh, showPersistentStatus, showTransientStatus, t]
   )
 
   const setAssetPoster = useCallback(
     async (request: AssetPosterRequest): Promise<ClipdockResult<void>> => {
-      setStatus(t(request.frameMs === null ? 'app.resettingPoster' : 'app.savingPoster'))
+      showPersistentStatus(t(request.frameMs === null ? 'app.resettingPoster' : 'app.savingPoster'))
       const result = await window.clipdock.setAssetPoster(request)
-      setStatus(
-        result.ok
-          ? t(request.frameMs === null ? 'app.posterReset' : 'app.posterReady')
-          : localizeError(result.error.message)
-      )
+      if (result.ok)
+        showTransientStatus(t(request.frameMs === null ? 'app.posterReset' : 'app.posterReady'))
+      else showPersistentStatus(localizeError(result.error.message))
       if (result.ok) await refresh()
       return result
     },
-    [localizeError, refresh, t]
+    [localizeError, refresh, showPersistentStatus, showTransientStatus, t]
   )
 
   const selectAsset = (asset: AssetSummary, event: MouseEvent): void => {
@@ -641,6 +666,7 @@ function App(): JSX.Element {
             onRegenerate={(items) =>
               void mutate((bridge) => bridge.regeneratePreviews(items.map((item) => item.id)))
             }
+            onRelink={(asset) => void mutate((bridge) => bridge.relinkPack(asset.packId))}
           />
         ) : null}
 
@@ -669,6 +695,14 @@ function App(): JSX.Element {
           onOpen={(asset) => setQuickLookId(asset.id)}
           onDrag={dragAsset}
           onFavorite={(asset) => void mutate((bridge) => bridge.toggleAssetFavorite(asset.id))}
+          onRelink={(asset) => void mutate((bridge) => bridge.relinkPack(asset.packId))}
+          onRetryPreview={(asset) => void mutate((bridge) => bridge.regeneratePreviews([asset.id]))}
+          filteredEmpty={
+            Boolean(search.trim()) ||
+            countAssetFilters(filters) > 0 ||
+            activeSmartCollectionId !== null
+          }
+          onClearFilters={clearEmptyFilters}
         />
         {nextCursor ? (
           <button type="button" className="load-more" onClick={() => void loadAssets(true)}>

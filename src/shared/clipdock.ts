@@ -51,6 +51,7 @@ export interface AssetPackSummary {
   rootPath: string
   assetCount: number
   missingCount: number
+  rootMissing: boolean
   createdAtMs: number
   updatedAtMs: number
   lastScannedAtMs: number | null

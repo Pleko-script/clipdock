@@ -102,6 +102,9 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - No more than three video previews and one sound preview may be active at once.
 - `P` starts or stops the same preview on a focused card without replacing Enter, Space, or arrow navigation.
 - A frame chosen in the video editor can replace the generated card thumbnail. Reset restores the generated thumbnail; a changed source invalidates the custom frame.
+- Compact card signals are limited to actionable readiness (preparing, failed, missing, unsupported) and media traits needed for placement (Alpha, portrait, audio). Codec and verbose format details remain in File details.
+- Missing assets expose **Relink Pack** in place; failed previews expose **Retry preview**. Filtered empty states expose **Clear filters**, while a truly empty library points to pack import.
+- Drag readiness is evaluated separately from preview readiness: a failed thumbnail does not block an otherwise ready original file. A requested trim or rotation blocks drag until its derivative is ready.
 
 ## Interaction contract
 
@@ -120,6 +123,7 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - Linked packs are watched after startup, add, and relink. File bursts are debounced before affected paths are reconciled through the normal scan status model.
 - A disconnected root keeps its pack and asset metadata unchanged. Reconnect performs one recovery scan; manual rescan remains available.
 - Editor resize separators support Left/Right Arrow (8 px), Shift+Arrow (24 px), Home (140 px), and End (320 px). Collapse buttons and separators retain a visible keyboard focus outline.
+- Background progress owns one stable status-bar slot. Routine success text clears after four seconds; failures remain until the next relevant action instead of creating stacked notifications.
 
 ## Anti-slop guardrails
 

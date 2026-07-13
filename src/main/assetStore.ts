@@ -57,6 +57,7 @@ export interface StoredAssetPath {
   filePath: string
   mediaType: AssetMediaType
   status: AssetStatus
+  compatibility: CompatibilityLevel
   trimStartMs: number | null
   trimEndMs: number | null
   rotationDegrees: VideoRotation
@@ -720,7 +721,7 @@ class SqliteAssetStore implements AssetStore {
     try {
       const row = this.database
         .prepare(
-          'SELECT id,file_path,media_type,status,trim_start_ms,trim_end_ms,rotation_degrees,trim_status,trimmed_path FROM assets WHERE id=?'
+          'SELECT id,file_path,media_type,status,compatibility,trim_start_ms,trim_end_ms,rotation_degrees,trim_status,trimmed_path FROM assets WHERE id=?'
         )
         .get(assetId) as
         | {
@@ -728,6 +729,7 @@ class SqliteAssetStore implements AssetStore {
             file_path: string
             media_type: AssetMediaType
             status: AssetStatus
+            compatibility: CompatibilityLevel
             trim_start_ms: number | null
             trim_end_ms: number | null
             rotation_degrees: VideoRotation
@@ -741,6 +743,7 @@ class SqliteAssetStore implements AssetStore {
             filePath: row.file_path,
             mediaType: row.media_type,
             status: row.status,
+            compatibility: row.compatibility,
             trimStartMs: row.trim_start_ms,
             trimEndMs: row.trim_end_ms,
             rotationDegrees: [90, 180, 270].includes(row.rotation_degrees)
@@ -895,12 +898,20 @@ class SqliteAssetStore implements AssetStore {
   }
 
   private packSummary(row: Record<string, unknown>): AssetPackSummary {
+    const rootPath = String(row.root_path)
+    let rootMissing = false
+    try {
+      rootMissing = !statSync(rootPath).isDirectory()
+    } catch {
+      rootMissing = true
+    }
     return {
       id: String(row.id),
       name: String(row.name),
-      rootPath: String(row.root_path),
+      rootPath,
       assetCount: Number(row.asset_count ?? 0),
       missingCount: Number(row.missing_count ?? 0),
+      rootMissing,
       createdAtMs: Number(row.created_at_ms),
       updatedAtMs: Number(row.updated_at_ms),
       lastScannedAtMs: row.last_scanned_at_ms === null ? null : Number(row.last_scanned_at_ms)

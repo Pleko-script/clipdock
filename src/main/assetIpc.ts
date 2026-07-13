@@ -407,6 +407,8 @@ export function registerAssetIpc(): AssetIpcRegistration {
         const asset = runtime.store.getAssetPath(id)
         if (!asset.ok) throw new Error(asset.error.message)
         if (asset.value.status !== 'ready') throw new Error('Asset is not available for dragging.')
+        if (asset.value.compatibility === 'unsupported')
+          throw new Error('Asset compatibility is marked as unsupported.')
         let selectedPath = asset.value.filePath
         const usingPreparedVideo =
           asset.value.trimStartMs !== null || asset.value.rotationDegrees !== 0

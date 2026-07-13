@@ -35,6 +35,7 @@ const filterUi = read('src/renderer/src/components/AssetFilters.tsx')
 const inspector = read('src/renderer/src/components/AssetInspector.tsx')
 const trimEditor = read('src/renderer/src/components/AssetTrimEditor.tsx')
 const panelResizeHandle = read('src/renderer/src/components/PanelResizeHandle.tsx')
+const sidebar = read('src/renderer/src/components/AssetSidebar.tsx')
 const i18n = read('src/renderer/src/i18n.tsx')
 const rendererCss = [
   read('src/renderer/src/assets/base.css'),
@@ -91,7 +92,8 @@ function compileRuntimeModules() {
         join(projectRoot, 'src/shared/clipdock.ts'),
         join(projectRoot, 'src/shared/assetFilters.ts'),
         join(projectRoot, 'src/renderer/src/previewScrub.ts'),
-        join(projectRoot, 'src/renderer/src/editorPanelLayout.ts')
+        join(projectRoot, 'src/renderer/src/editorPanelLayout.ts'),
+        join(projectRoot, 'src/renderer/src/assetReadiness.ts')
       ]
     })
   )
@@ -113,7 +115,8 @@ function compileRuntimeModules() {
     store: requireCompiled(join(outDir, 'src/main/assetStore.js')),
     probe: requireCompiled(join(outDir, 'src/main/mediaProbe.js')),
     scrub: requireCompiled(join(outDir, 'src/renderer/src/previewScrub.js')),
-    editorLayout: requireCompiled(join(outDir, 'src/renderer/src/editorPanelLayout.js'))
+    editorLayout: requireCompiled(join(outDir, 'src/renderer/src/editorPanelLayout.js')),
+    readiness: requireCompiled(join(outDir, 'src/renderer/src/assetReadiness.js'))
   }
 }
 
@@ -192,6 +195,7 @@ test('Electron boundary is hardened and preserves media range headers', () => {
   assert.match(html, /media-src[^;]*clipdock-media:/)
   assert.match(ipc, /statSync/)
   assert.match(ipc, /status !== 'ready'/)
+  assert.match(ipc, /compatibility === 'unsupported'/)
   assert.match(
     ipc,
     /event\.sender\.startDrag\(dragItem\)[\s\S]*recordAssetUsage\(assetIds\)[\s\S]*type: 'drag-started'/
@@ -1079,9 +1083,11 @@ test('mixed-media scan ignores unsupported files and builds cached previews', as
 
     const offlineRoot = `${packRoot}-offline`
     renameSync(packRoot, offlineRoot)
+    assert.equal(store.listPacks([pack.id]).value[0].rootMissing, true)
     assert.equal(await runtime.scanner.reconcileAssetPackPaths(store, pack, null), null)
     assert.equal(store.queryAssets({}).value.totalCount, 4)
     renameSync(offlineRoot, packRoot)
+    assert.equal(store.listPacks([pack.id]).value[0].rootMissing, false)
     const reconnected = await runtime.scanner.reconcileAssetPackPaths(store, pack, null)
     assert.equal(reconnected.scannedFiles, 3)
     assert.equal(store.getAsset(sound.id).value.status, 'missing')
@@ -1111,6 +1117,10 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
     /const startPreview[\s\S]*setWarming\(true\)[\s\S]*hoverTimer\.current = setTimeout/
   )
   assert.match(grid, /nextPreviewIds/)
+  assert.match(grid, /assetCanDrag/)
+  assert.match(grid, /grid\.clearFilters/)
+  assert.match(grid, /grid\.relinkPack/)
+  assert.match(grid, /grid\.retryPreview/)
   assert.match(app, /AssetLibraryScope/)
   assert.match(app, /scheduleRefresh/)
   assert.match(trimEditor, /role="slider"/)
@@ -1133,6 +1143,7 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(inspector, /ResizeObserver/)
   assert.match(inspector, /organizeCollapsed/)
   assert.match(inspector, /detailsCollapsed/)
+  assert.match(inspector, /inspector\.dragReadiness/)
   assert.match(panelResizeHandle, /role="separator"/)
   assert.match(panelResizeHandle, /aria-valuemin/)
   assert.match(panelResizeHandle, /ArrowLeft/)
@@ -1154,6 +1165,10 @@ test('renderer is virtualized, scoped, and contains no privileged imports', () =
   assert.match(filterUi, /asset-filter-chips/)
   assert.match(filterUi, /filter\.clearAll/)
   assert.match(filterUi, /type="checkbox"/)
+  assert.match(sidebar, /pack\.missingCount/)
+  assert.match(sidebar, /pack\.rootMissing/)
+  assert.match(app, /showTransientStatus/)
+  assert.match(app, /4_000/)
 })
 
 test('editor panel layout clamps, persists, and responds to available width', () => {
@@ -1186,6 +1201,50 @@ test('editor panel layout clamps, persists, and responds to available width', ()
   assert.deepEqual(layout.responsivePanelCollapse(1280), { organize: false, details: false })
   assert.deepEqual(layout.responsivePanelCollapse(899), { organize: false, details: true })
   assert.deepEqual(layout.responsivePanelCollapse(719), { organize: true, details: true })
+})
+
+test('asset drag readiness separates source, derivative, and recovery states', () => {
+  const base = {
+    status: 'ready',
+    compatibility: 'expected',
+    trimStartMs: null,
+    rotationDegrees: 0,
+    trimStatus: 'none',
+    mediaType: 'video',
+    audioCodec: null,
+    channels: null,
+    widthPixels: 1920,
+    heightPixels: 1080
+  }
+  assert.equal(runtime.readiness.assetDragReadiness(base), 'original-ready')
+  assert.equal(runtime.readiness.assetCanDrag(base), true)
+  assert.equal(
+    runtime.readiness.assetDragReadiness({ ...base, trimStartMs: 0, trimStatus: 'pending' }),
+    'derivative-preparing'
+  )
+  assert.equal(
+    runtime.readiness.assetCanDrag({ ...base, trimStartMs: 0, trimStatus: 'pending' }),
+    false
+  )
+  assert.equal(
+    runtime.readiness.assetDragReadiness({ ...base, trimStartMs: 0, trimStatus: 'ready' }),
+    'derivative-ready'
+  )
+  assert.equal(runtime.readiness.assetDragReadiness({ ...base, status: 'missing' }), 'missing')
+  assert.equal(runtime.readiness.assetDragReadiness({ ...base, status: 'error' }), 'failed')
+  assert.equal(
+    runtime.readiness.assetDragReadiness({ ...base, compatibility: 'unsupported' }),
+    'unsupported'
+  )
+  assert.equal(
+    runtime.readiness.assetDragReadiness({ ...base, trimStartMs: 0, trimStatus: 'failed' }),
+    'failed'
+  )
+  assert.equal(
+    runtime.readiness.assetIsPortrait({ ...base, widthPixels: 1080, heightPixels: 1920 }),
+    true
+  )
+  assert.equal(runtime.readiness.assetHasAudio({ ...base, audioCodec: 'aac' }), true)
 })
 
 test('package, docs, and preview pipeline describe the shipped system', () => {

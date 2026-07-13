@@ -1,5 +1,6 @@
 import type { DragEvent, JSX } from 'react'
 import {
+  AlertTriangle,
   FolderHeart,
   FolderOpen,
   Heart,
@@ -135,7 +136,10 @@ export function AssetSidebar({
         </header>
         {navigation.packs.length === 0 ? <p>{t('sidebar.noPacks')}</p> : null}
         {navigation.packs.map((pack) => (
-          <div className="sidebar-item-row" key={pack.id}>
+          <div
+            className={`sidebar-item-row${pack.missingCount || pack.rootMissing ? ' missing' : ''}`}
+            key={pack.id}
+          >
             <button
               type="button"
               className={activePackId === pack.id && !activeSmartCollectionId ? 'active' : ''}
@@ -144,7 +148,20 @@ export function AssetSidebar({
             >
               <FolderOpen size={16} />
               <span>{pack.name}</span>
-              <em>{pack.assetCount}</em>
+              <em className="pack-summary-count">
+                {pack.assetCount}
+                {pack.missingCount ? (
+                  <span title={t('sidebar.missingAssets', { count: pack.missingCount })}>
+                    <AlertTriangle size={10} />
+                    {pack.missingCount}
+                  </span>
+                ) : null}
+                {pack.rootMissing ? (
+                  <span title={t('sidebar.packMissing')}>
+                    <AlertTriangle size={10} />!
+                  </span>
+                ) : null}
+              </em>
             </button>
             <button
               type="button"

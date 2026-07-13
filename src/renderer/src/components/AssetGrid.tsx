@@ -10,8 +10,28 @@ import {
   type PointerEvent
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AlertTriangle, AudioLines, Film, Heart, Layers3, Scissors } from 'lucide-react'
+import {
+  AlertTriangle,
+  AudioLines,
+  Film,
+  Heart,
+  Layers3,
+  Link2,
+  LoaderCircle,
+  RectangleVertical,
+  RefreshCw,
+  Scissors,
+  ShieldX,
+  Sparkles
+} from 'lucide-react'
 import type { AssetSummary } from '../../../shared/clipdock'
+import {
+  assetCanDrag,
+  assetDragReadiness,
+  assetHasAudio,
+  assetIsPortrait,
+  type AssetDragReadiness
+} from '../assetReadiness'
 import { useI18n } from '../i18n'
 import {
   AUDIO_HOVER_DELAY_MS,
@@ -35,6 +55,12 @@ function KindIcon({ asset }: { asset: AssetSummary }): JSX.Element {
   return <Film size={15} />
 }
 
+function ReadinessIcon({ readiness }: { readiness: AssetDragReadiness }): JSX.Element {
+  if (readiness === 'derivative-preparing') return <LoaderCircle size={10} className="spin" />
+  if (readiness === 'unsupported') return <ShieldX size={10} />
+  return <AlertTriangle size={10} />
+}
+
 function AssetCard({
   asset,
   selected,
@@ -44,7 +70,9 @@ function AssetCard({
   onOpen,
   onDrag,
   onPreview,
-  onFavorite
+  onFavorite,
+  onRelink,
+  onRetryPreview
 }: {
   asset: AssetSummary
   selected: boolean
@@ -55,6 +83,8 @@ function AssetCard({
   onDrag: (event: DragEvent<HTMLElement>) => void
   onPreview: (active: boolean) => void
   onFavorite: () => void
+  onRelink: () => void
+  onRetryPreview: () => void
 }): JSX.Element {
   const { kind, t } = useI18n()
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,6 +94,12 @@ function AssetCard({
   const scrubRatioRef = useRef(0.5)
   const [warming, setWarming] = useState(false)
   const [scrubRatio, setScrubRatio] = useState(0.5)
+  const readiness = assetDragReadiness(asset)
+  const canDrag = assetCanDrag(asset)
+  const showReadiness =
+    readiness !== 'original-ready' && readiness !== 'derivative-ready' && readiness !== 'missing'
+  const needsRelink = readiness === 'missing'
+  const previewFailed = asset.previewStatus === 'failed' && !needsRelink
 
   useEffect(() => {
     onPreviewRef.current = onPreview
@@ -129,12 +165,12 @@ function AssetCard({
 
   return (
     <article
-      className={`asset-card${selected ? ' selected' : ''}${active ? ' active' : ''}${asset.status !== 'ready' ? ' unavailable' : ''}`}
+      className={`asset-card${selected ? ' selected' : ''}${active ? ' active' : ''}${canDrag ? '' : ' unavailable'}`}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
       aria-keyshortcuts="P Enter Space"
-      draggable={asset.status === 'ready'}
+      draggable={canDrag}
       onClick={onSelect}
       onDoubleClick={onOpen}
       onKeyDown={(event) => {
@@ -219,14 +255,54 @@ function AssetCard({
             )}
           </span>
         </div>
-        {asset.status !== 'ready' ? (
-          <div className="asset-error">
-            <AlertTriangle size={18} />
-            {t('grid.missing')}
+        <div className="asset-card-signals">
+          {asset.hasAlpha ? (
+            <span>
+              <Sparkles size={10} />
+              {t('grid.alpha')}
+            </span>
+          ) : null}
+          {assetIsPortrait(asset) ? (
+            <span>
+              <RectangleVertical size={10} />
+              {t('grid.portrait')}
+            </span>
+          ) : null}
+          {assetHasAudio(asset) ? (
+            <span>
+              <AudioLines size={10} />
+              {t('grid.audio')}
+            </span>
+          ) : null}
+          {showReadiness ? (
+            <span className={`readiness ${readiness}`}>
+              <ReadinessIcon readiness={readiness} />
+              {t(`readiness.${readiness}`)}
+            </span>
+          ) : null}
+          {asset.previewStatus === 'pending' ? (
+            <span className="preview-pending">
+              <LoaderCircle size={10} className="spin" />
+              {t('grid.buildingPreview')}
+            </span>
+          ) : null}
+        </div>
+        {needsRelink || previewFailed ? (
+          <div className="asset-recovery">
+            {needsRelink ? <AlertTriangle size={18} /> : <RefreshCw size={18} />}
+            <strong>{t(needsRelink ? 'grid.missing' : 'grid.previewFailed')}</strong>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                if (needsRelink) onRelink()
+                else onRetryPreview()
+              }}
+            >
+              {needsRelink ? <Link2 size={13} /> : <RefreshCw size={13} />}
+              {t(needsRelink ? 'grid.relinkPack' : 'grid.retryPreview')}
+            </button>
           </div>
-        ) : null}
-        {asset.previewStatus === 'pending' ? (
-          <span className="preview-pending">{t('grid.buildingPreview')}</span>
         ) : null}
       </div>
       <div className="asset-caption">
@@ -245,7 +321,11 @@ export function AssetGrid({
   onSelect,
   onOpen,
   onDrag,
-  onFavorite
+  onFavorite,
+  onRelink,
+  onRetryPreview,
+  filteredEmpty,
+  onClearFilters
 }: {
   assets: AssetSummary[]
   selectedIds: Set<string>
@@ -255,6 +335,10 @@ export function AssetGrid({
   onOpen: (asset: AssetSummary) => void
   onDrag: (asset: AssetSummary, event: DragEvent<HTMLElement>) => void
   onFavorite: (asset: AssetSummary) => void
+  onRelink: (asset: AssetSummary) => void
+  onRetryPreview: (asset: AssetSummary) => void
+  filteredEmpty: boolean
+  onClearFilters: () => void
 }): JSX.Element {
   const { t } = useI18n()
   const parentRef = useRef<HTMLDivElement>(null)
@@ -294,8 +378,13 @@ export function AssetGrid({
     return (
       <div className="asset-empty">
         <Film size={42} />
-        <strong>{t('grid.emptyTitle')}</strong>
-        <span>{t('grid.emptyBody')}</span>
+        <strong>{t(filteredEmpty ? 'grid.filteredEmptyTitle' : 'grid.emptyTitle')}</strong>
+        <span>{t(filteredEmpty ? 'grid.filteredEmptyBody' : 'grid.emptyBody')}</span>
+        {filteredEmpty ? (
+          <button type="button" onClick={onClearFilters}>
+            {t('grid.clearFilters')}
+          </button>
+        ) : null}
       </div>
     )
   }
@@ -320,6 +409,8 @@ export function AssetGrid({
                 onOpen={() => onOpen(asset)}
                 onDrag={(event) => onDrag(asset, event)}
                 onFavorite={() => onFavorite(asset)}
+                onRelink={() => onRelink(asset)}
+                onRetryPreview={() => onRetryPreview(asset)}
                 onPreview={(previewing) =>
                   setPreviewIds((current) =>
                     nextPreviewIds(current, asset.id, previewing, (id) => mediaTypes.get(id))
