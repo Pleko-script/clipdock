@@ -3,6 +3,15 @@ import { mkdirSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { refreshAssetSearch } from './assetSearch'
+import {
+  claimAssetHashJobs,
+  completeAssetHash,
+  failAssetHash,
+  queueAssetHashes,
+  requeueAssetHash,
+  resetRunningAssetHashJobs,
+  type HashJobRecord
+} from './assetHashStore'
 import { buildAssetWhere, queryAssetFacets } from './assetQuery'
 import { persistAssetPoster } from './assetPosterStore'
 import {
@@ -26,6 +35,7 @@ import {
 } from './assetTrimStore'
 import type {
   AssetKind,
+  AssetDuplicateVisibilityRequest,
   AssetMediaType,
   AssetNavigationSnapshot,
   AssetPage,
@@ -132,6 +142,11 @@ export interface AssetStore {
   ) => ClipdockResult<void>
   failPreview: (assetId: string, message: string) => ClipdockResult<void>
   resetRunningJobs: () => ClipdockResult<void>
+  claimHashJobs: (limit: number) => ClipdockResult<HashJobRecord[]>
+  completeHash: (job: HashJobRecord, contentHash: string) => ClipdockResult<boolean>
+  failHash: (jobId: string, message: string) => ClipdockResult<void>
+  requeueHash: (jobId: string) => ClipdockResult<void>
+  setDuplicateVisibility: (request: AssetDuplicateVisibilityRequest) => ClipdockResult<void>
   close: () => void
 }
 
@@ -161,6 +176,10 @@ interface AssetRow {
   ucs_cat_id: string | null
   ucs_category: string | null
   ucs_subcategory: string | null
+  content_hash: string | null
+  hash_size_bytes: number | null
+  hash_modified_at_ms: number | null
+  duplicate_hidden: number
   has_alpha: number
   favorite: number
   last_used_at_ms: number | null
@@ -247,6 +266,10 @@ class SqliteAssetStore implements AssetStore {
     }
   }
 
+  private queueHashJobs(assetIds: string[], timestamp: number): void {
+    queueAssetHashes(this.database, this.createId, assetIds, timestamp)
+  }
+
   migrate(): ClipdockResult<void> {
     try {
       migrateAssetSchema(this.database, this.now())
@@ -290,7 +313,7 @@ class SqliteAssetStore implements AssetStore {
           `
         SELECT p.*, COUNT(a.id) asset_count,
                SUM(CASE WHEN a.status = 'missing' THEN 1 ELSE 0 END) missing_count
-        FROM asset_packs p LEFT JOIN assets a ON a.pack_id = p.id
+        FROM asset_packs p LEFT JOIN assets a ON a.pack_id = p.id AND a.duplicate_hidden=0
         ${filter} GROUP BY p.id ORDER BY p.name COLLATE NOCASE
       `
         )
@@ -352,7 +375,8 @@ class SqliteAssetStore implements AssetStore {
           input,
           this.createId,
           timestamp,
-          (ids, priority, queuedAt) => this.queuePreviewJobs(ids, priority, queuedAt)
+          (ids, priority, queuedAt) => this.queuePreviewJobs(ids, priority, queuedAt),
+          (ids, queuedAt) => this.queueHashJobs(ids, queuedAt)
         )
       )
       return ok(saved)
@@ -416,7 +440,7 @@ class SqliteAssetStore implements AssetStore {
         .get(...params) as { count: number }
       const rows = this.database
         .prepare(
-          `SELECT a.*, p.name pack_name FROM assets a JOIN asset_packs p ON p.id=a.pack_id ${whereSql} ORDER BY ${order} LIMIT ? OFFSET ?`
+          `SELECT a.*, p.name pack_name FROM assets a JOIN asset_packs p ON p.id=a.pack_id ${whereSql} ORDER BY ${query.duplicateOnly ? 'a.content_hash, p.name COLLATE NOCASE, a.relative_path COLLATE NOCASE' : order} LIMIT ? OFFSET ?`
         )
         .all(...params, limit, offset) as unknown as AssetRow[]
       const totalCount = Number(totalRow.count)
@@ -447,13 +471,31 @@ class SqliteAssetStore implements AssetStore {
         .all() as Array<{ name: string }>
       const counts = this.database
         .prepare(
-          `SELECT COUNT(*) total, SUM(favorite) favorites, SUM(CASE WHEN last_used_at_ms IS NOT NULL THEN 1 ELSE 0 END) used, SUM(CASE WHEN preview_status='pending' THEN 1 ELSE 0 END) pending FROM assets`
+          `SELECT
+             SUM(CASE WHEN duplicate_hidden=0 THEN 1 ELSE 0 END) total,
+             SUM(CASE WHEN favorite=1 AND duplicate_hidden=0 THEN 1 ELSE 0 END) favorites,
+             SUM(CASE WHEN last_used_at_ms IS NOT NULL AND duplicate_hidden=0 THEN 1 ELSE 0 END) used,
+             SUM(CASE WHEN preview_status='pending' THEN 1 ELSE 0 END) pending,
+             (SELECT COUNT(*) FROM hash_jobs h JOIN assets ha ON ha.id=h.asset_id
+              WHERE h.status IN ('pending','running') AND ha.status='ready') hash_pending,
+             SUM(CASE WHEN status='ready' AND content_hash IN (
+               SELECT content_hash FROM assets WHERE status='ready' AND content_hash IS NOT NULL
+               GROUP BY content_hash HAVING COUNT(*) > 1
+             ) THEN 1 ELSE 0 END) duplicate_assets,
+             (SELECT COUNT(*) FROM (
+               SELECT content_hash FROM assets WHERE status='ready' AND content_hash IS NOT NULL
+               GROUP BY content_hash HAVING COUNT(*) > 1
+             )) duplicate_groups
+           FROM assets`
         )
         .get() as {
         total: number
         favorites: number | null
         used: number | null
         pending: number | null
+        hash_pending: number | null
+        duplicate_assets: number | null
+        duplicate_groups: number | null
       }
       return ok({
         packs: packs.value,
@@ -469,6 +511,9 @@ class SqliteAssetStore implements AssetStore {
         totalAssets: Number(counts.total),
         favoriteCount: Number(counts.favorites ?? 0),
         usedAssetCount: Number(counts.used ?? 0),
+        duplicateAssetCount: Number(counts.duplicate_assets ?? 0),
+        duplicateGroupCount: Number(counts.duplicate_groups ?? 0),
+        pendingHashCount: Number(counts.hash_pending ?? 0),
         pendingPreviewCount: Number(counts.pending ?? 0)
       })
     } catch {
@@ -890,9 +935,68 @@ class SqliteAssetStore implements AssetStore {
       this.database
         .prepare(`UPDATE preview_jobs SET status='pending', updated_at_ms=? WHERE status='running'`)
         .run(this.now())
+      resetRunningAssetHashJobs(this.database, this.now())
       return ok(undefined)
     } catch {
       return fail('Preview jobs could not be resumed.')
+    }
+  }
+
+  claimHashJobs(limit: number): ClipdockResult<HashJobRecord[]> {
+    try {
+      return ok(this.transaction(() => claimAssetHashJobs(this.database, limit, this.now())))
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : 'Hash jobs could not be claimed.')
+    }
+  }
+
+  completeHash(job: HashJobRecord, contentHash: string): ClipdockResult<boolean> {
+    try {
+      return ok(
+        this.transaction(() => completeAssetHash(this.database, job, contentHash, this.now()))
+      )
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : 'Asset hash could not be saved.')
+    }
+  }
+
+  failHash(jobId: string, message: string): ClipdockResult<void> {
+    try {
+      failAssetHash(this.database, jobId, message, this.now())
+      return ok(undefined)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : 'Asset hash failure could not be saved.')
+    }
+  }
+
+  requeueHash(jobId: string): ClipdockResult<void> {
+    try {
+      requeueAssetHash(this.database, jobId, this.now())
+      return ok(undefined)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : 'Asset hash could not be requeued.')
+    }
+  }
+
+  setDuplicateVisibility(request: AssetDuplicateVisibilityRequest): ClipdockResult<void> {
+    const ids = [...new Set(request.assetIds.filter(Boolean))].slice(0, 256)
+    if (!ids.length) return fail('Select at least one asset.', 'update')
+    try {
+      const placeholders = ids.map(() => '?').join(',')
+      const result = this.database
+        .prepare(
+          `UPDATE assets SET duplicate_hidden=?,updated_at_ms=?
+           WHERE id IN (${placeholders}) AND content_hash IN (
+             SELECT content_hash FROM assets WHERE status='ready' AND content_hash IS NOT NULL
+             GROUP BY content_hash HAVING COUNT(*) > 1
+           ) AND status='ready'`
+        )
+        .run(request.hidden ? 1 : 0, this.now(), ...ids)
+      return result.changes ? ok(undefined) : fail('No exact duplicate was selected.', 'update')
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : 'Duplicate visibility could not be saved.'
+      )
     }
   }
 
@@ -938,6 +1042,18 @@ class SqliteAssetStore implements AssetStore {
       .all(...ids) as Array<{ asset_id: string; collection_id: string }>
     const tags = new Map<string, string[]>()
     const collections = new Map<string, string[]>()
+    const duplicateCounts = new Map<string, number>()
+    const hashes = [...new Set(rows.map((row) => row.content_hash).filter(Boolean))] as string[]
+    if (hashes.length) {
+      const hashPlaceholders = hashes.map(() => '?').join(',')
+      const duplicateRows = this.database
+        .prepare(
+          `SELECT content_hash,COUNT(*) count FROM assets
+           WHERE status='ready' AND content_hash IN (${hashPlaceholders}) GROUP BY content_hash`
+        )
+        .all(...hashes) as Array<{ content_hash: string; count: number }>
+      for (const item of duplicateRows) duplicateCounts.set(item.content_hash, Number(item.count))
+    }
     for (const item of tagRows) {
       const values = tags.get(item.asset_id) ?? []
       values.push(item.name)
@@ -949,11 +1065,21 @@ class SqliteAssetStore implements AssetStore {
       collections.set(item.asset_id, values)
     }
     return rows.map((row) =>
-      this.assetSummary(row, tags.get(row.id) ?? [], collections.get(row.id) ?? [])
+      this.assetSummary(
+        row,
+        tags.get(row.id) ?? [],
+        collections.get(row.id) ?? [],
+        row.content_hash ? (duplicateCounts.get(row.content_hash) ?? 1) : 0
+      )
     )
   }
 
-  private assetSummary(row: AssetRow, tags: string[], collectionIds: string[]): AssetSummary {
+  private assetSummary(
+    row: AssetRow,
+    tags: string[],
+    collectionIds: string[],
+    duplicateCount: number
+  ): AssetSummary {
     return {
       id: row.id,
       packId: row.pack_id,
@@ -980,6 +1106,9 @@ class SqliteAssetStore implements AssetStore {
       ucsCatId: row.ucs_cat_id,
       ucsCategory: row.ucs_category,
       ucsSubcategory: row.ucs_subcategory,
+      contentHash: row.content_hash,
+      duplicateCount,
+      duplicateHidden: row.duplicate_hidden === 1,
       hasAlpha: row.has_alpha === 1,
       favorite: row.favorite === 1,
       lastUsedAtMs: row.last_used_at_ms === null ? null : Number(row.last_used_at_ms),

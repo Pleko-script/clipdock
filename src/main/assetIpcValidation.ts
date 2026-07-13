@@ -4,6 +4,7 @@ import {
   type AssetAspect,
   type AssetAudioState,
   type AssetDragRequest,
+  type AssetDuplicateVisibilityRequest,
   type AssetDurationBucket,
   type AssetKind,
   type AssetLibraryScope,
@@ -105,6 +106,8 @@ export function parseAssetQuery(value: unknown): AssetQuery {
     tags: strings(input.tags, 32, 64),
     favoriteOnly: input.favoriteOnly === true,
     usedOnly: input.usedOnly === true,
+    duplicateOnly: input.duplicateOnly === true,
+    includeHiddenDuplicates: input.includeHiddenDuplicates === true,
     formats: formats.length ? formats : undefined,
     codecs: strings(input.codecs, 64, 64).map((codec) => codec.toLocaleLowerCase('en-US')),
     statuses: enumStrings(input.statuses, ASSET_STATUSES),
@@ -124,7 +127,7 @@ export function parseSmartCollectionCriteria(value: unknown): AssetSmartCollecti
         ? { type: 'collection' as const, id: validAssetId(scopeInput.id) }
         : scopeType === 'tag' && validLabel(scopeInput.name, 64)
           ? { type: 'tag' as const, name: validLabel(scopeInput.name, 64) }
-          : scopeType === 'favorites' || scopeType === 'recent'
+          : scopeType === 'favorites' || scopeType === 'recent' || scopeType === 'duplicates'
             ? { type: scopeType }
             : { type: 'all' as const }
   const parsedFilters = parseAssetQuery(record(input.filters))
@@ -164,6 +167,11 @@ export function parseAssetUpdate(value: unknown): AssetUpdateRequest {
     tags: Array.isArray(input.tags) ? strings(input.tags, 32, 64) : undefined,
     note: typeof input.note === 'string' ? input.note.slice(0, 4000) : undefined
   }
+}
+
+export function parseDuplicateVisibility(value: unknown): AssetDuplicateVisibilityRequest {
+  const input = record(value)
+  return { assetIds: validAssetIds(input.assetIds), hidden: input.hidden === true }
 }
 
 export function parseAssetTrim(value: unknown): AssetTrimRequest {

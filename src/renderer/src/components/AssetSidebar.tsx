@@ -1,6 +1,7 @@
 import type { DragEvent, JSX } from 'react'
 import {
   AlertTriangle,
+  CopyCheck,
   FolderHeart,
   FolderOpen,
   Heart,
@@ -33,10 +34,12 @@ export function AssetSidebar({
   selectedTag,
   favoriteOnly,
   recentlyUsed,
+  duplicatesOnly,
   busy,
   onShowAll,
   onShowFavorites,
   onShowRecentlyUsed,
+  onShowDuplicates,
   onSelectPack,
   onSelectCollection,
   onSelectSmartCollection,
@@ -59,10 +62,12 @@ export function AssetSidebar({
   selectedTag: string | null
   favoriteOnly: boolean
   recentlyUsed: boolean
+  duplicatesOnly: boolean
   busy: boolean
   onShowAll: () => void
   onShowFavorites: () => void
   onShowRecentlyUsed: () => void
+  onShowDuplicates: () => void
   onSelectPack: (id: string) => void
   onSelectCollection: (id: string) => void
   onSelectSmartCollection: (collection: AssetSmartCollectionSummary) => void
@@ -100,7 +105,8 @@ export function AssetSidebar({
             !activeSmartCollectionId &&
             !selectedTag &&
             !favoriteOnly &&
-            !recentlyUsed
+            !recentlyUsed &&
+            !duplicatesOnly
               ? 'active'
               : ''
           }
@@ -109,6 +115,15 @@ export function AssetSidebar({
           <Library size={17} />
           <span>{t('sidebar.allAssets')}</span>
           <em>{navigation.totalAssets}</em>
+        </button>
+        <button
+          type="button"
+          className={duplicatesOnly && !activeSmartCollectionId ? 'active' : ''}
+          onClick={onShowDuplicates}
+        >
+          <CopyCheck size={17} />
+          <span>{t('sidebar.duplicates')}</span>
+          <em>{navigation.duplicateGroupCount}</em>
         </button>
         <button
           type="button"

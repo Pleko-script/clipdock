@@ -32,6 +32,9 @@ interface ExistingAsset {
   id: string
   modified_at_ms: number
   size_bytes: number
+  content_hash: string | null
+  hash_size_bytes: number | null
+  hash_modified_at_ms: number | null
 }
 
 export function upsertScannedAssetRecord(
@@ -39,7 +42,8 @@ export function upsertScannedAssetRecord(
   input: ScannedAssetInput,
   createId: () => string,
   timestamp: number,
-  queuePreview: (assetIds: string[], priority: number, timestamp: number) => void
+  queuePreview: (assetIds: string[], priority: number, timestamp: number) => void,
+  queueHash: (assetIds: string[], timestamp: number) => void
 ): { id: string; created: boolean } {
   const pack = database
     .prepare('SELECT root_path FROM asset_packs WHERE id = ?')
@@ -48,12 +52,14 @@ export function upsertScannedAssetRecord(
 
   const normalized = normalizeAssetPath(input.filePath)
   let existing = database
-    .prepare('SELECT id,modified_at_ms,size_bytes FROM assets WHERE normalized_file_path=?')
+    .prepare(
+      'SELECT id,modified_at_ms,size_bytes,content_hash,hash_size_bytes,hash_modified_at_ms FROM assets WHERE normalized_file_path=?'
+    )
     .get(normalized) as ExistingAsset | undefined
   if (!existing) {
     const movedCandidates = database
       .prepare(
-        `SELECT id,modified_at_ms,size_bytes FROM assets
+        `SELECT id,modified_at_ms,size_bytes,content_hash,hash_size_bytes,hash_modified_at_ms FROM assets
          WHERE pack_id=? AND status='missing' AND size_bytes=? AND modified_at_ms=? LIMIT 2`
       )
       .all(input.packId, input.sizeBytes, input.modifiedAtMs) as unknown as ExistingAsset[]
@@ -67,6 +73,10 @@ export function upsertScannedAssetRecord(
     !existing ||
     existing.modified_at_ms !== input.modifiedAtMs ||
     existing.size_bytes !== input.sizeBytes
+  const needsHash =
+    !existing?.content_hash ||
+    existing.hash_size_bytes !== input.sizeBytes ||
+    existing.hash_modified_at_ms !== input.modifiedAtMs
   database
     .prepare(
       `INSERT INTO assets (
@@ -91,6 +101,10 @@ export function upsertScannedAssetRecord(
         preview_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.preview_path END,
         poster_frame_ms=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.poster_frame_ms END,
         poster_path=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.poster_path END,
+        content_hash=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.content_hash END,
+        hash_size_bytes=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.hash_size_bytes END,
+        hash_modified_at_ms=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.hash_modified_at_ms END,
+        duplicate_hidden=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN 0 ELSE assets.duplicate_hidden END,
         trim_status=CASE WHEN (assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes) AND (assets.trim_start_ms IS NOT NULL OR assets.rotation_degrees != 0) THEN 'pending' ELSE assets.trim_status END,
         trim_error_message=CASE WHEN assets.modified_at_ms != excluded.modified_at_ms OR assets.size_bytes != excluded.size_bytes THEN NULL ELSE assets.trim_error_message END,
         updated_at_ms=excluded.updated_at_ms, last_error_message=NULL`
@@ -126,7 +140,10 @@ export function upsertScannedAssetRecord(
       timestamp,
       timestamp
     )
-  if (changed) queuePreview([id], 0, timestamp)
+  if (changed) {
+    queuePreview([id], 0, timestamp)
+  }
+  if (needsHash) queueHash([id], timestamp)
   refreshAssetSearch(database, id)
   return { id, created: !existing }
 }

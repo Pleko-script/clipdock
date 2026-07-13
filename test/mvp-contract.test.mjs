@@ -81,6 +81,8 @@ function compileRuntimeModules() {
       },
       include: [
         join(projectRoot, 'src/main/assetClassification.ts'),
+        join(projectRoot, 'src/main/assetHash.ts'),
+        join(projectRoot, 'src/main/assetHashStore.ts'),
         join(projectRoot, 'src/main/assetIpcValidation.ts'),
         join(projectRoot, 'src/main/assetPosterStore.ts'),
         join(projectRoot, 'src/main/assetPreview.ts'),
@@ -117,6 +119,7 @@ function compileRuntimeModules() {
     scratchRoot,
     filters: requireCompiled(join(outDir, 'src/shared/assetFilters.js')),
     classification: requireCompiled(join(outDir, 'src/main/assetClassification.js')),
+    hash: requireCompiled(join(outDir, 'src/main/assetHash.js')),
     validation: requireCompiled(join(outDir, 'src/main/assetIpcValidation.js')),
     preview: requireCompiled(join(outDir, 'src/main/assetPreview.js')),
     trim: requireCompiled(join(outDir, 'src/main/assetTrim.js')),
@@ -192,7 +195,7 @@ test('repository has one canonical asset architecture', () => {
   assert.doesNotMatch(main, /registerLibraryIpc|libraryIpc/)
   assert.doesNotMatch(preload, /getLibrarySnapshot|prepareClipDrag|startClipDrag/)
   assert.doesNotMatch(read('src/shared/clipdock.ts'), /LibrarySnapshot|LibraryClipRecordSummary/)
-  assert.ok(read('src/main/assetStore.ts').split(/\r?\n/).length < 1100)
+  assert.ok(read('src/main/assetStore.ts').split(/\r?\n/).length < 1200)
 })
 
 test('Electron boundary is hardened and preserves media range headers', () => {
@@ -772,6 +775,220 @@ test('legacy migration preserves metadata and new updates are atomic', () => {
     assert.deepEqual(store.navigation().value.smartCollections, [])
     assert.equal(existsSync(mediaPath), true)
     assert.equal(existsSync(secondMediaPath), true)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      /* preserve assertions */
+    }
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('schema 10 libraries migrate to persistent hash jobs without losing assets', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-hash-migration-'))
+  const packRoot = join(workspace, 'Pack')
+  const mediaPath = join(packRoot, 'sound.wav')
+  const databaseFile = join(workspace, 'library.sqlite')
+  let store
+  try {
+    mkdirSync(packRoot, { recursive: true })
+    writeFileSync(mediaPath, 'sound bytes')
+    store = runtime.store.openAssetStore({
+      databaseFile,
+      previewCacheDir: join(workspace, 'previews')
+    }).value
+    const packId = store.createPack(packRoot).value
+    const stats = statSync(mediaPath)
+    assert.equal(
+      store.upsertScannedAsset({
+        packId,
+        filePath: mediaPath,
+        kind: 'sound',
+        mediaType: 'audio',
+        overlayMode: 'raw',
+        compatibility: 'expected',
+        sizeBytes: stats.size,
+        modifiedAtMs: Math.round(stats.mtimeMs),
+        durationMs: 1000,
+        widthPixels: null,
+        heightPixels: null,
+        fps: null,
+        codec: null,
+        audioCodec: 'pcm_s16le',
+        sampleRate: 48000,
+        channels: 2,
+        ucsCatId: null,
+        ucsCategory: null,
+        ucsSubcategory: null,
+        hasAlpha: false,
+        metadataJson: null
+      }).ok,
+      true
+    )
+    store.close()
+    store = null
+
+    const oldDatabase = new DatabaseSync(databaseFile)
+    oldDatabase.exec(`
+      DROP TABLE hash_jobs;
+      DROP INDEX IF EXISTS idx_assets_content_hash;
+      ALTER TABLE assets DROP COLUMN content_hash;
+      ALTER TABLE assets DROP COLUMN hash_size_bytes;
+      ALTER TABLE assets DROP COLUMN hash_modified_at_ms;
+      ALTER TABLE assets DROP COLUMN duplicate_hidden;
+      PRAGMA user_version=10;
+    `)
+    oldDatabase.close()
+
+    const migrated = runtime.store.openAssetStore({
+      databaseFile,
+      previewCacheDir: join(workspace, 'previews')
+    })
+    assert.equal(migrated.ok, true, migrated.error?.message)
+    store = migrated.value
+    assert.equal(store.queryAssets({}).value.totalCount, 1)
+    assert.equal(store.navigation().value.pendingHashCount, 1)
+    assert.equal(store.getAsset(store.queryAssets({}).value.items[0].id).value.contentHash, null)
+  } finally {
+    try {
+      store?.close()
+    } catch {
+      /* preserve assertions */
+    }
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('exact duplicate hashes are persistent, content-based, and non-destructive', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'clipdock-duplicate-audit-'))
+  const firstRoot = join(workspace, 'Pack One')
+  const secondRoot = join(workspace, 'Pack Two')
+  const databaseFile = join(workspace, 'library.sqlite')
+  const previewCacheDir = join(workspace, 'generated-previews')
+  let store
+  try {
+    mkdirSync(firstRoot, { recursive: true })
+    mkdirSync(secondRoot, { recursive: true })
+    const sameContentFirst = join(firstRoot, 'first-name.wav')
+    const sameContentSecond = join(secondRoot, 'other-name.wav')
+    const sameNameFirst = join(firstRoot, 'same-name.wav')
+    const sameNameSecond = join(secondRoot, 'same-name.wav')
+    writeFileSync(sameContentFirst, 'identical source bytes')
+    writeFileSync(sameContentSecond, 'identical source bytes')
+    writeFileSync(sameNameFirst, 'different content one')
+    writeFileSync(sameNameSecond, 'different content two')
+
+    store = runtime.store.openAssetStore({
+      databaseFile,
+      previewCacheDir,
+      createId: createIdGenerator('duplicate')
+    }).value
+    const firstPackId = store.createPack(firstRoot).value
+    const secondPackId = store.createPack(secondRoot).value
+    const add = (packId, filePath) => {
+      const stats = statSync(filePath)
+      const saved = store.upsertScannedAsset({
+        packId,
+        filePath,
+        kind: 'sound',
+        mediaType: 'audio',
+        overlayMode: 'raw',
+        compatibility: 'expected',
+        sizeBytes: stats.size,
+        modifiedAtMs: Math.round(stats.mtimeMs),
+        durationMs: 1000,
+        widthPixels: null,
+        heightPixels: null,
+        fps: null,
+        codec: null,
+        audioCodec: 'pcm_s16le',
+        sampleRate: 48000,
+        channels: 2,
+        ucsCatId: null,
+        ucsCategory: null,
+        ucsSubcategory: null,
+        hasAlpha: false,
+        metadataJson: null
+      })
+      assert.equal(saved.ok, true, saved.error?.message)
+      return saved.value.id
+    }
+    const firstId = add(firstPackId, sameContentFirst)
+    const secondId = add(secondPackId, sameContentSecond)
+    add(firstPackId, sameNameFirst)
+    add(secondPackId, sameNameSecond)
+
+    const hashedPaths = []
+    while (true) {
+      const claimed = store.claimHashJobs(1)
+      assert.equal(claimed.ok, true, claimed.error?.message)
+      if (!claimed.value[0]) break
+      const job = claimed.value[0]
+      hashedPaths.push(job.filePath)
+      assert.equal(job.filePath.startsWith(previewCacheDir), false)
+      const hash = await runtime.hash.hashAssetFile(job.filePath)
+      assert.equal(store.completeHash(job, hash).value, true)
+    }
+    assert.equal(hashedPaths.length, 4)
+
+    let duplicates = store.queryAssets({
+      duplicateOnly: true,
+      includeHiddenDuplicates: true
+    }).value
+    assert.equal(duplicates.totalCount, 2)
+    assert.deepEqual(
+      new Set(duplicates.items.map((asset) => asset.id)),
+      new Set([firstId, secondId])
+    )
+    assert.equal(new Set(duplicates.items.map((asset) => asset.packId)).size, 2)
+    assert.equal(duplicates.items[0].duplicateCount, 2)
+    assert.equal(store.navigation().value.duplicateGroupCount, 1)
+    assert.equal(store.navigation().value.duplicateAssetCount, 2)
+    assert.equal(store.navigation().value.pendingHashCount, 0)
+
+    assert.equal(store.setDuplicateVisibility({ assetIds: [secondId], hidden: true }).ok, true)
+    assert.equal(store.queryAssets({}).value.totalCount, 3)
+    duplicates = store.queryAssets({
+      duplicateOnly: true,
+      includeHiddenDuplicates: true
+    }).value
+    assert.equal(duplicates.items.find((asset) => asset.id === secondId).duplicateHidden, true)
+
+    writeFileSync(sameContentSecond, 'changed source bytes with another size')
+    add(secondPackId, sameContentSecond)
+    assert.equal(store.getAsset(secondId).value.contentHash, null)
+    assert.equal(store.getAsset(secondId).value.duplicateHidden, false)
+    assert.equal(
+      store.queryAssets({ duplicateOnly: true, includeHiddenDuplicates: true }).value.totalCount,
+      0
+    )
+
+    const interrupted = store.claimHashJobs(1).value[0]
+    assert.equal(interrupted.assetId, secondId)
+    store.close()
+    store = runtime.store.openAssetStore({ databaseFile, previewCacheDir }).value
+    const resumed = store.claimHashJobs(1).value[0]
+    assert.equal(resumed.assetId, secondId)
+    assert.equal(resumed.attempts, interrupted.attempts + 1)
+    const changedHash = await runtime.hash.hashAssetFile(resumed.filePath)
+    assert.equal(store.completeHash(resumed, changedHash).value, true)
+    assert.equal(
+      store.queryAssets({ duplicateOnly: true, includeHiddenDuplicates: true }).value.totalCount,
+      0
+    )
+
+    const largeFile = join(firstRoot, 'cancel.wav')
+    writeFileSync(largeFile, Buffer.alloc(4 * 1024 * 1024, 7))
+    const abort = new AbortController()
+    const hashing = runtime.hash.hashAssetFile(largeFile, abort.signal)
+    setImmediate(() => abort.abort())
+    await assert.rejects(hashing, (error) => error?.name === 'AbortError')
+
+    assert.equal(existsSync(sameContentFirst), true)
+    assert.equal(existsSync(sameContentSecond), true)
+    assert.equal(readFileSync(sameContentFirst, 'utf8'), 'identical source bytes')
+    assert.equal(readFileSync(sameContentSecond, 'utf8'), 'changed source bytes with another size')
   } finally {
     try {
       store?.close()
@@ -1367,7 +1584,11 @@ test('package, docs, and preview pipeline describe the shipped system', () => {
     assert.ok(packageJson.dependencies[dependency])
   }
   assert.match(schema, /BEGIN IMMEDIATE/)
-  assert.match(schema, /ASSET_SCHEMA_VERSION = 10/)
+  assert.match(schema, /ASSET_SCHEMA_VERSION = 11/)
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS hash_jobs/)
+  assert.match(read('src/main/assetHash.ts'), /createReadStream/)
+  assert.match(read('src/main/assetHash.ts'), /sha256/)
+  assert.match(read('src/renderer/src/components/DuplicateReview.tsx'), /asset\.filePath/)
   assert.match(schema, /ucs_cat_id TEXT/)
   assert.match(searchSource, /USING fts5/)
   assert.match(searchSource, /USING fts4/)

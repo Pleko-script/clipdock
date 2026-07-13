@@ -6,7 +6,7 @@ import {
   type Page
 } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -49,6 +49,8 @@ interface SeedAsset {
   trimStatus?: 'none' | 'pending' | 'ready' | 'failed'
   thumbnailPath?: string | null
   previewPath?: string | null
+  contentHash?: string | null
+  duplicateHidden?: boolean
 }
 
 function generateVideo(filePath: string, width: number, height: number): void {
@@ -143,10 +145,11 @@ function seedAssets(databaseFile: string, packRoot: string, assets: SeedAsset[])
     `INSERT INTO assets
       (id, pack_id, relative_path, category_path, display_name, file_path, normalized_file_path,
        extension, kind, media_type, overlay_mode, compatibility, size_bytes, modified_at_ms,
-       duration_ms, width_pixels, height_pixels, fps, codec, audio_codec, channels, has_alpha,
+       duration_ms, width_pixels, height_pixels, fps, codec, audio_codec, channels,
+       content_hash, hash_size_bytes, hash_modified_at_ms, duplicate_hidden, has_alpha,
        favorite, note, status, preview_status, trim_start_ms, trim_end_ms, rotation_degrees,
        trim_status, thumbnail_path, preview_path, created_at_ms, updated_at_ms)
-     VALUES (?, 'visual-pack', ?, '', ?, ?, ?, ?, ?, ?, 'raw', ?, ?, ?, 3000, ?, ?, ?, ?, ?, ?, ?,
+     VALUES (?, 'visual-pack', ?, '', ?, ?, ?, ?, ?, ?, 'raw', ?, ?, ?, 3000, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        0, '', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
   )
   for (const asset of assets) {
@@ -169,6 +172,10 @@ function seedAssets(databaseFile: string, packRoot: string, assets: SeedAsset[])
       asset.codec ?? (mediaType === 'video' ? 'h264' : null),
       asset.audioCodec ?? (mediaType === 'audio' ? 'pcm_s16le' : null),
       asset.channels ?? (mediaType === 'audio' ? 1 : null),
+      asset.contentHash ?? null,
+      asset.contentHash ? (existsSync(asset.filePath) ? statSync(asset.filePath).size : 0) : null,
+      asset.contentHash ? timestamp : null,
+      asset.duplicateHidden ? 1 : 0,
       asset.hasAlpha ? 1 : 0,
       asset.status ?? 'ready',
       asset.previewStatus ?? 'ready',
@@ -200,6 +207,7 @@ test.beforeAll(async () => {
   mkdirSync(packRoot, { recursive: true })
   const landscape = join(packRoot, 'Landscape.mp4')
   const portrait = join(packRoot, 'Portrait.mp4')
+  const landscapeCopy = join(packRoot, 'Landscape Copy.mp4')
   const alpha = join(packRoot, 'Alpha.mov')
   const preparing = join(packRoot, 'Preparing.mp4')
   const previewFailed = join(packRoot, 'Preview Failed.mp4')
@@ -210,6 +218,7 @@ test.beforeAll(async () => {
   const spectrogram = join(packRoot, 'Sound-spectrogram.webp')
   const missing = join(packRoot, 'Missing.mp4')
   generateVideo(landscape, 640, 360)
+  copyFileSync(landscape, landscapeCopy)
   generateVideo(portrait, 360, 640)
   generateVideo(alpha, 640, 360)
   generateVideo(preparing, 640, 360)
@@ -224,7 +233,18 @@ test.beforeAll(async () => {
   await bootstrap.app.close()
 
   seedAssets(join(profilePath, 'clipdock-library', 'library.sqlite'), packRoot, [
-    { id: 'visual-landscape', displayName: 'Landscape.mp4', filePath: landscape },
+    {
+      id: 'visual-landscape',
+      displayName: 'Landscape.mp4',
+      filePath: landscape,
+      contentHash: 'visual-exact-duplicate'
+    },
+    {
+      id: 'visual-landscape-copy',
+      displayName: 'Landscape Copy.mp4',
+      filePath: landscapeCopy,
+      contentHash: 'visual-exact-duplicate'
+    },
     {
       id: 'visual-portrait',
       displayName: 'Portrait.mp4',
@@ -287,7 +307,7 @@ test.beforeAll(async () => {
   const running = await launch(profilePath)
   app = running.app
   page = running.page
-  await expect(page.locator('.asset-card')).toHaveCount(9)
+  await expect(page.locator('.asset-card')).toHaveCount(10)
 })
 
 test.afterAll(async () => {
@@ -436,6 +456,39 @@ test('temporary comparison tray orders, auditions, limits, collapses, and clears
   await expect(page.locator('.asset-results-bar strong')).toContainText('2')
 })
 
+test('exact duplicate review shows sources and only hides database results', async () => {
+  await page.setViewportSize(viewports[0])
+  await page.locator('.sidebar-nav button').filter({ hasText: 'Duplikate' }).click()
+  const group = page.locator('.duplicate-group')
+  await expect(group).toHaveCount(1)
+  await expect(group.locator('article')).toHaveCount(2)
+  await expect(group).toContainText('Landscape.mp4')
+  await expect(group).toContainText('Landscape Copy.mp4')
+  await expect(
+    group.locator('article').filter({ hasText: 'Landscape.mp4' }).locator('code')
+  ).toContainText('Landscape.mp4')
+
+  const copy = group.locator('article').filter({ hasText: 'Landscape Copy.mp4' })
+  await copy.locator('button').last().click()
+  await expect(copy).toHaveClass(/hidden-copy/)
+  await page.locator('.sidebar-nav button').filter({ hasText: 'Alle Assets' }).click()
+  await expect(page.locator('.asset-card')).toHaveCount(9)
+
+  await page.locator('.sidebar-nav button').filter({ hasText: 'Duplikate' }).click()
+  await group
+    .locator('article')
+    .filter({ hasText: 'Landscape Copy.mp4' })
+    .locator('button')
+    .last()
+    .click()
+  await page.locator('.sidebar-nav button').filter({ hasText: 'Alle Assets' }).click()
+  await expect(page.locator('.asset-card')).toHaveCount(10)
+  await page.locator('.sidebar-nav button').filter({ hasText: 'Duplikate' }).click()
+  await page.screenshot({ path: test.info().outputPath('duplicates-1280x720.png') })
+  await page.locator('.sidebar-nav button').filter({ hasText: 'Alle Assets' }).click()
+  await page.getByLabel('Video-Editor ein-/ausblenden').click()
+})
+
 test('portrait and landscape media remain contained at target resolutions', async () => {
   const testInfo = test.info()
   for (const viewport of viewports) {
@@ -549,5 +602,5 @@ test('actionable card and filtered-empty states expose recovery', async () => {
   await expect(page.locator('.asset-empty button')).toBeVisible()
   await page.screenshot({ path: test.info().outputPath('filtered-empty-1280x720.png') })
   await page.locator('.asset-empty button').click()
-  await expect(page.locator('.asset-card')).toHaveCount(9)
+  await expect(page.locator('.asset-card')).toHaveCount(10)
 })

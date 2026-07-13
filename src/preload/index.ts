@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   AssetDragEvent,
   AssetDragRequest,
+  AssetDuplicateVisibilityRequest,
   AssetJobEvent,
   AssetNavigationSnapshot,
   AssetPage,
@@ -76,6 +77,12 @@ const clipdock: ClipdockApi = Object.freeze({
       ...request,
       assetIds: limitedIds(request?.assetIds, 256)
     }),
+  setDuplicateVisibility: (request: AssetDuplicateVisibilityRequest) =>
+    invoke<void>(
+      channels.setDuplicateVisibility,
+      'ClipDock could not update duplicate visibility.',
+      { ...request, assetIds: limitedIds(request?.assetIds, 256) }
+    ),
   setAssetTrim: (request: AssetTrimRequest) =>
     invoke<void>(channels.setTrim, 'ClipDock could not prepare the selected range.', request),
   setAssetPoster: (request: AssetPosterRequest) =>

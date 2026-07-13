@@ -73,7 +73,9 @@ export function smartCollectionCriteriaToQuery(criteria: AssetSmartCollectionCri
             ? { favoriteOnly: true }
             : criteria.scope.type === 'recent'
               ? { usedOnly: true }
-              : {}
+              : criteria.scope.type === 'duplicates'
+                ? { duplicateOnly: true, includeHiddenDuplicates: true }
+                : {}
   return {
     search: criteria.search || undefined,
     exactSearch: criteria.exactSearch,

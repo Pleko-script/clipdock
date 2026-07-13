@@ -7,6 +7,7 @@ import { assetInvokeChannels, assetIpcChannels as channels } from '../shared/ipc
 import type { AssetJobEvent, AssetScanResult, ClipdockResult } from '../shared/clipdock'
 import icon from '../../resources/icon.png?asset'
 import { generateAssetPreview, generatePosterFrame } from './assetPreview'
+import { hashAssetFile } from './assetHash'
 import { generateTrimmedAsset } from './assetTrim'
 import {
   parseAssetDragRequest,
@@ -15,6 +16,7 @@ import {
   parseSmartCollectionSave,
   parseAssetTrim,
   parseAssetUpdate,
+  parseDuplicateVisibility,
   validAssetId,
   validAssetIds,
   validLabel
@@ -68,6 +70,8 @@ export function registerAssetIpc(): AssetIpcRegistration {
   }
   let disposed = false
   let workerRunning = false
+  let hashWorkerRunning = false
+  let hashAbort: AbortController | null = null
   let scanRunning = false
   let rendererContents: WebContents | null = null
   const trimsRunning = new Set<string>()
@@ -157,6 +161,45 @@ export function registerAssetIpc(): AssetIpcRegistration {
     }
   }
 
+  const pumpHashes = async (sender: WebContents | null): Promise<void> => {
+    if (disposed || hashWorkerRunning) return
+    hashWorkerRunning = true
+    try {
+      while (!disposed) {
+        const claimed = runtime.store.claimHashJobs(1)
+        if (!claimed.ok || !claimed.value[0]) break
+        const job = claimed.value[0]
+        hashAbort = new AbortController()
+        try {
+          const before = statSync(job.filePath)
+          if (before.size !== job.sizeBytes || Math.round(before.mtimeMs) !== job.modifiedAtMs) {
+            runtime.store.requeueHash(job.id)
+            break
+          }
+          const contentHash = await hashAssetFile(job.filePath, hashAbort.signal)
+          const after = statSync(job.filePath)
+          if (after.size !== job.sizeBytes || Math.round(after.mtimeMs) !== job.modifiedAtMs) {
+            runtime.store.requeueHash(job.id)
+            break
+          }
+          const completed = runtime.store.completeHash(job, contentHash)
+          if (!completed.ok) throw new Error(completed.error.message)
+          if (completed.value)
+            send(sender ?? rendererContents, { type: 'hash-completed', assetId: job.assetId })
+        } catch (error) {
+          if (disposed || (error instanceof DOMException && error.name === 'AbortError')) break
+          const message = error instanceof Error ? error.message : 'Asset hashing failed.'
+          runtime.store.failHash(job.id, message)
+          send(sender ?? rendererContents, { type: 'hash-failed', assetId: job.assetId, message })
+        } finally {
+          hashAbort = null
+        }
+      }
+    } finally {
+      hashWorkerRunning = false
+    }
+  }
+
   const scanPacksUnlocked = async (
     packIds: string[],
     sender: WebContents
@@ -168,6 +211,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
       results.push(await scanAssetPack(runtime.store, pack, (event) => send(sender, event)))
     }
     void pumpPreviews(sender)
+    void pumpHashes(sender)
     return ok(results)
   }
 
@@ -202,6 +246,7 @@ export function registerAssetIpc(): AssetIpcRegistration {
       )
       if (!result) return 'unavailable'
       void pumpPreviews(rendererContents)
+      void pumpHashes(rendererContents)
       return 'complete'
     } finally {
       scanRunning = false
@@ -264,6 +309,9 @@ export function registerAssetIpc(): AssetIpcRegistration {
   )
   ipcMain.handle(channels.updateAssets, (_event, request: unknown) =>
     runtime.store.updateAssets(parseAssetUpdate(request))
+  )
+  ipcMain.handle(channels.setDuplicateVisibility, (_event, request: unknown) =>
+    runtime.store.setDuplicateVisibility(parseDuplicateVisibility(request))
   )
   ipcMain.handle(channels.setTrim, async (_event, rawRequest: unknown) => {
     const request = parseAssetTrim(rawRequest)
@@ -463,11 +511,13 @@ export function registerAssetIpc(): AssetIpcRegistration {
   setImmediate(() => {
     syncPackWatchers()
     void pumpPreviews(null)
+    void pumpHashes(null)
   })
 
   return {
     dispose: () => {
       disposed = true
+      hashAbort?.abort()
       packWatcher.dispose()
       for (const channel of assetInvokeChannels) ipcMain.removeHandler(channel)
       ipcMain.removeAllListeners(channels.startDrag)

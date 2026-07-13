@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AssetStatus } from '../shared/clipdock'
 import { createAssetSearchIndex, refreshAssetSearch } from './assetSearch'
 
-export const ASSET_SCHEMA_VERSION = 10
+export const ASSET_SCHEMA_VERSION = 11
 
 interface LegacySourceRow {
   id: string
@@ -82,6 +82,10 @@ function createTables(database: DatabaseSync): void {
       ucs_cat_id TEXT,
       ucs_category TEXT,
       ucs_subcategory TEXT,
+      content_hash TEXT,
+      hash_size_bytes INTEGER,
+      hash_modified_at_ms INTEGER,
+      duplicate_hidden INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_hidden IN (0,1)),
       has_alpha INTEGER NOT NULL DEFAULT 0 CHECK (has_alpha IN (0,1)),
       metadata_json TEXT,
       favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0,1)),
@@ -149,6 +153,15 @@ function createTables(database: DatabaseSync): void {
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS hash_jobs (
+      id TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL UNIQUE REFERENCES assets(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','failed')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error_message TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value_json TEXT NOT NULL,
@@ -161,6 +174,7 @@ function createTables(database: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_asset_tags_tag ON asset_tags(tag_id);
     CREATE INDEX IF NOT EXISTS idx_collection_assets_asset ON collection_assets(asset_id);
     CREATE INDEX IF NOT EXISTS idx_preview_jobs_queue ON preview_jobs(status, priority DESC, created_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_hash_jobs_queue ON hash_jobs(status, created_at_ms);
   `)
 }
 
@@ -224,6 +238,41 @@ function ensureUcsColumns(database: DatabaseSync): void {
     if (!columns.has(name)) database.exec(`ALTER TABLE assets ADD COLUMN ${name} TEXT`)
   }
   database.exec('CREATE INDEX IF NOT EXISTS idx_assets_ucs_cat_id ON assets(ucs_cat_id)')
+}
+
+function ensureHashColumns(database: DatabaseSync, timestamp: number): void {
+  const columns = new Set(
+    (database.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>).map(
+      (column) => column.name
+    )
+  )
+  if (!columns.has('content_hash')) database.exec('ALTER TABLE assets ADD COLUMN content_hash TEXT')
+  if (!columns.has('hash_size_bytes'))
+    database.exec('ALTER TABLE assets ADD COLUMN hash_size_bytes INTEGER')
+  if (!columns.has('hash_modified_at_ms'))
+    database.exec('ALTER TABLE assets ADD COLUMN hash_modified_at_ms INTEGER')
+  if (!columns.has('duplicate_hidden'))
+    database.exec(
+      'ALTER TABLE assets ADD COLUMN duplicate_hidden INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_hidden IN (0,1))'
+    )
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS hash_jobs (
+      id TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL UNIQUE REFERENCES assets(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','failed')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error_message TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_hash_jobs_queue ON hash_jobs(status, created_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_assets_content_hash ON assets(content_hash) WHERE content_hash IS NOT NULL;
+    INSERT OR IGNORE INTO hash_jobs
+      (id, asset_id, status, attempts, last_error_message, created_at_ms, updated_at_ms)
+    SELECT lower(hex(randomblob(16))), id, 'pending', 0, NULL, ${timestamp}, ${timestamp}
+    FROM assets
+    WHERE status='ready' AND (content_hash IS NULL OR hash_size_bytes != size_bytes OR hash_modified_at_ms != modified_at_ms);
+  `)
 }
 
 function legacyRootPath(source: LegacySourceRow): string {
@@ -362,6 +411,7 @@ export function migrateAssetSchema(database: DatabaseSync, timestamp: number): v
       'UPDATE assets SET rotation_degrees=0 WHERE rotation_degrees IS NULL OR rotation_degrees NOT IN (0,90,180,270)'
     )
     migrateLegacy(database, timestamp)
+    ensureHashColumns(database, timestamp)
     database.exec('COMMIT')
     database.exec(`PRAGMA user_version = ${ASSET_SCHEMA_VERSION}`)
   } catch (error) {

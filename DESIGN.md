@@ -55,6 +55,7 @@ Both families are bundled locally. The UI never requires a network connection.
 - Editor side panels: 220 px by default, independently resizable from 140 to 320 px, and independently collapsible to 36 px. Widths and collapse choices persist locally. Below 900 px of editor space, File details collapses automatically; below 720 px, both side panels collapse until more space is available.
 - Grid: all remaining space below the editor, row-virtualized with 14 px gaps.
 - Comparison tray: session-only overlay above the status bar; at most six ordered candidates, collapsible without changing grid measurements.
+- Duplicate review: a library scope grouped by complete content hash; every row shows pack, relative path, and full source path.
 - Application minimum: 900 × 600 px.
 
 The editor hierarchy is fixed:
@@ -145,6 +146,13 @@ Cards consist of a full-bleed preview and two text lines. The default card does 
 - A disconnected root keeps its pack and asset metadata unchanged. Reconnect performs one recovery scan; manual rescan remains available.
 - Editor resize separators support Left/Right Arrow (8 px), Shift+Arrow (24 px), Home (140 px), and End (320 px). Collapse buttons and separators retain a visible keyboard focus outline.
 - Background progress owns one stable status-bar slot. Routine success text clears after four seconds; failures remain until the next relevant action instead of creating stacked notifications.
+
+## Exact duplicates
+
+- Duplicate identity is a complete streamed SHA-256 of the original asset path. Filenames, previews, poster frames, and prepared trim/rotation files never participate.
+- One persistent hash job runs at a time. A running job returns to pending after restart, and source size plus modification time invalidate a stored hash.
+- Groups can span packs. The review view keeps every copy, including hidden ones, visible with its pack and source path.
+- **Hide copy** changes only `duplicate_hidden` in SQLite. It never deletes, moves, renames, or rewrites the source and can always be reversed in the duplicate review.
 
 ## Anti-slop guardrails
 

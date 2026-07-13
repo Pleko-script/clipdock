@@ -107,6 +107,14 @@ export function buildAssetWhere(
 
   if (query.favoriteOnly) where.push('a.favorite = 1')
   if (query.usedOnly) where.push('a.last_used_at_ms IS NOT NULL')
+  if (!query.includeHiddenDuplicates) where.push('a.duplicate_hidden = 0')
+  if (query.duplicateOnly)
+    where.push(
+      `a.status='ready' AND a.content_hash IS NOT NULL AND EXISTS (
+        SELECT 1 FROM assets duplicate
+        WHERE duplicate.status='ready' AND duplicate.content_hash=a.content_hash AND duplicate.id!=a.id
+      )`
+    )
   if (query.collectionIds?.length) {
     where.push(
       `EXISTS (SELECT 1 FROM collection_assets ca WHERE ca.asset_id=a.id AND ca.collection_id IN (${query.collectionIds.map(() => '?').join(',')}))`

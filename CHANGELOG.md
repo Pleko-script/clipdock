@@ -2,6 +2,13 @@
 
 All notable changes to ClipDock are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Exact, non-destructive duplicate detection with persistent streamed SHA-256 background jobs.
+- A bilingual duplicate review that groups matching source files across packs and can hide or restore redundant library rows without touching media.
+
 ## [1.1.0] - 2026-07-11
 
 ### Added

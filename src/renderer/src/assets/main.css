@@ -2,6 +2,7 @@
 @import './trim.css';
 @import './audio.css';
 @import './comparison.css';
+@import './duplicates.css';
 
 .asset-app {
   display: grid;

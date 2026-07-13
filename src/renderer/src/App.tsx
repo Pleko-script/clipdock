@@ -40,6 +40,7 @@ import { AssetFilterChips, AssetFilterPopover } from './components/AssetFilters'
 import { AssetInspector } from './components/AssetInspector'
 import { AssetSidebar } from './components/AssetSidebar'
 import { ComparisonTray } from './components/ComparisonTray'
+import { DuplicateReview } from './components/DuplicateReview'
 import { QuickLook } from './components/QuickLook'
 import {
   addComparisonCandidate,
@@ -56,6 +57,9 @@ const EMPTY_NAVIGATION: AssetNavigationSnapshot = {
   totalAssets: 0,
   favoriteCount: 0,
   usedAssetCount: 0,
+  duplicateAssetCount: 0,
+  duplicateGroupCount: 0,
+  pendingHashCount: 0,
   pendingPreviewCount: 0
 }
 
@@ -80,6 +84,7 @@ function scopeFilters(scope: AssetLibraryScope): Partial<AssetQuery> {
   if (scope.type === 'tag') return { tags: [scope.name] }
   if (scope.type === 'favorites') return { favoriteOnly: true }
   if (scope.type === 'recent') return { usedOnly: true }
+  if (scope.type === 'duplicates') return { duplicateOnly: true, includeHiddenDuplicates: true }
   return {}
 }
 
@@ -103,6 +108,7 @@ function scopeName(
     )
   if (scope.type === 'tag') return `#${scope.name}`
   if (scope.type === 'favorites') return t('app.favorites')
+  if (scope.type === 'duplicates') return t('app.duplicates')
   return scope.type === 'recent' ? t('app.recentlyUsed') : t('app.entireLibrary')
 }
 
@@ -271,9 +277,15 @@ function App(): JSX.Element {
         )
       if (event.type === 'preview-progress')
         setJobProgress(t('app.previewProgress', { current: event.completed, total: event.total }))
-      if (event.type === 'scan-completed' || event.type === 'preview-completed') scheduleRefresh()
+      if (
+        event.type === 'scan-completed' ||
+        event.type === 'preview-completed' ||
+        event.type === 'hash-completed'
+      )
+        scheduleRefresh()
       if (event.type === 'scan-completed') setJobProgress(null)
       if (event.type === 'preview-failed') showPersistentStatus(localizeError(event.message))
+      if (event.type === 'hash-failed') showPersistentStatus(localizeError(event.message))
     })
     const offDrag = window.clipdock.onAssetDragEvent((event) => {
       const preparedCount = event.trimmedAssetIds?.length ?? 0
@@ -529,6 +541,7 @@ function App(): JSX.Element {
         selectedTag={scope.type === 'tag' ? scope.name : null}
         favoriteOnly={scope.type === 'favorites'}
         recentlyUsed={scope.type === 'recent'}
+        duplicatesOnly={scope.type === 'duplicates'}
         busy={busy}
         onShowAll={() => {
           setActiveSmartCollectionId(null)
@@ -542,6 +555,11 @@ function App(): JSX.Element {
           setActiveSmartCollectionId(null)
           setScope({ type: 'recent' })
           setSort('last-used')
+        }}
+        onShowDuplicates={() => {
+          setActiveSmartCollectionId(null)
+          setInspectorOpen(false)
+          setScope({ type: 'duplicates' })
         }}
         onSelectPack={(id) => {
           setActiveSmartCollectionId(null)
@@ -762,27 +780,48 @@ function App(): JSX.Element {
           <span>{scopeName(scope, navigation, activeSmartCollectionId, t)}</span>
         </div>
 
-        <AssetGrid
-          assets={assets}
-          selectedIds={selectedIds}
-          activeId={activeId}
-          density={density}
-          onSelect={selectAsset}
-          onOpen={(asset) => setQuickLookId(asset.id)}
-          onDrag={dragAsset}
-          onFavorite={(asset) => void mutate((bridge) => bridge.toggleAssetFavorite(asset.id))}
-          onRelink={(asset) => void mutate((bridge) => bridge.relinkPack(asset.packId))}
-          onRetryPreview={(asset) => void mutate((bridge) => bridge.regeneratePreviews([asset.id]))}
-          comparisonIds={comparisonIds}
-          comparisonLimitReached={comparisonAssets.length >= COMPARISON_SHORTLIST_LIMIT}
-          onToggleComparison={toggleComparisonAsset}
-          filteredEmpty={
-            Boolean(search.trim()) ||
-            countAssetFilters(filters) > 0 ||
-            activeSmartCollectionId !== null
-          }
-          onClearFilters={clearEmptyFilters}
-        />
+        {scope.type === 'duplicates' ? (
+          <DuplicateReview
+            assets={assets}
+            activeId={activeId}
+            onSelect={(asset) => {
+              setActiveId(asset.id)
+              setSelectedIds(new Set([asset.id]))
+            }}
+            onOpen={(asset) => setQuickLookId(asset.id)}
+            onDrag={dragAsset}
+            onReveal={(asset) => void mutate((bridge) => bridge.revealAsset(asset.id))}
+            onSetHidden={(asset, hidden) =>
+              void mutate((bridge) =>
+                bridge.setDuplicateVisibility({ assetIds: [asset.id], hidden })
+              )
+            }
+          />
+        ) : (
+          <AssetGrid
+            assets={assets}
+            selectedIds={selectedIds}
+            activeId={activeId}
+            density={density}
+            onSelect={selectAsset}
+            onOpen={(asset) => setQuickLookId(asset.id)}
+            onDrag={dragAsset}
+            onFavorite={(asset) => void mutate((bridge) => bridge.toggleAssetFavorite(asset.id))}
+            onRelink={(asset) => void mutate((bridge) => bridge.relinkPack(asset.packId))}
+            onRetryPreview={(asset) =>
+              void mutate((bridge) => bridge.regeneratePreviews([asset.id]))
+            }
+            comparisonIds={comparisonIds}
+            comparisonLimitReached={comparisonAssets.length >= COMPARISON_SHORTLIST_LIMIT}
+            onToggleComparison={toggleComparisonAsset}
+            filteredEmpty={
+              Boolean(search.trim()) ||
+              countAssetFilters(filters) > 0 ||
+              activeSmartCollectionId !== null
+            }
+            onClearFilters={clearEmptyFilters}
+          />
+        )}
         {comparisonAssets.length > 0 && comparisonActiveId ? (
           <ComparisonTray
             assets={comparisonAssets}
@@ -806,14 +845,16 @@ function App(): JSX.Element {
         <footer className="asset-status">
           <span>{jobProgress ?? status ?? t('app.ready')}</span>
           <span>
-            {navigation.pendingPreviewCount
-              ? t(
-                  navigation.pendingPreviewCount === 1
-                    ? 'results.previewsOne'
-                    : 'results.previewsMany',
-                  { count: navigation.pendingPreviewCount }
-                )
-              : t('results.cacheReady')}
+            {navigation.pendingHashCount
+              ? t('results.hashesPending', { count: navigation.pendingHashCount })
+              : navigation.pendingPreviewCount
+                ? t(
+                    navigation.pendingPreviewCount === 1
+                      ? 'results.previewsOne'
+                      : 'results.previewsMany',
+                    { count: navigation.pendingPreviewCount }
+                  )
+                : t('results.cacheReady')}
           </span>
         </footer>
       </section>

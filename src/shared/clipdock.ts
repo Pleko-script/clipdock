@@ -69,6 +69,7 @@ export type AssetLibraryScope =
   | { type: 'all' }
   | { type: 'favorites' }
   | { type: 'recent' }
+  | { type: 'duplicates' }
   | { type: 'pack'; id: string }
   | { type: 'collection'; id: string }
   | { type: 'tag'; name: string }
@@ -99,6 +100,9 @@ export interface AssetSummary {
   ucsCatId: string | null
   ucsCategory: string | null
   ucsSubcategory: string | null
+  contentHash: string | null
+  duplicateCount: number
+  duplicateHidden: boolean
   hasAlpha: boolean
   favorite: boolean
   lastUsedAtMs: number | null
@@ -138,6 +142,8 @@ export interface AssetQuery {
   tags?: string[]
   favoriteOnly?: boolean
   usedOnly?: boolean
+  duplicateOnly?: boolean
+  includeHiddenDuplicates?: boolean
   formats?: string[]
   codecs?: string[]
   statuses?: AssetStatus[]
@@ -221,6 +227,9 @@ export interface AssetNavigationSnapshot {
   totalAssets: number
   favoriteCount: number
   usedAssetCount: number
+  duplicateAssetCount: number
+  duplicateGroupCount: number
+  pendingHashCount: number
   pendingPreviewCount: number
 }
 
@@ -230,6 +239,11 @@ export interface AssetUpdateRequest {
   overlayMode?: OverlayMode
   tags?: string[]
   note?: string
+}
+
+export interface AssetDuplicateVisibilityRequest {
+  assetIds: string[]
+  hidden: boolean
 }
 
 export interface AssetTrimRequest {
@@ -259,6 +273,8 @@ export type AssetJobEvent =
   | { type: 'preview-progress'; assetId: string; completed: number; total: number }
   | { type: 'preview-completed'; assetId: string }
   | { type: 'preview-failed'; assetId: string; message: string }
+  | { type: 'hash-completed'; assetId: string }
+  | { type: 'hash-failed'; assetId: string; message: string }
 
 export interface AssetDragRequest {
   assetIds: string[]
@@ -278,6 +294,9 @@ export interface ClipdockApi {
   relinkPack: (packId: string) => Promise<ClipdockResult<AssetScanResult>>
   rescanPacks: (packIds?: string[]) => Promise<ClipdockResult<AssetScanResult[]>>
   updateAssets: (request: AssetUpdateRequest) => Promise<ClipdockResult<void>>
+  setDuplicateVisibility: (
+    request: AssetDuplicateVisibilityRequest
+  ) => Promise<ClipdockResult<void>>
   setAssetTrim: (request: AssetTrimRequest) => Promise<ClipdockResult<void>>
   setAssetPoster: (request: AssetPosterRequest) => Promise<ClipdockResult<void>>
   toggleAssetFavorite: (assetId: string) => Promise<ClipdockResult<void>>

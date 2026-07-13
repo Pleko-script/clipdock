@@ -33,24 +33,25 @@ Effect libraries grow quickly. Finding one transition or sound often means openi
 
 ## Features
 
-|              | Feature                     | What it does                                                                                                 |
-| ------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Browse**   | Scrubbable asset grid       | Maps horizontal pointer position to a muted cached preview while keeping large libraries virtualized.        |
-| **Preview**  | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.                |
-| **Find**     | Bilingual SFX search        | Expands reviewed German/English sound terms locally, offers exact-only mode, and reads available UCS fields. |
-| **Reuse**    | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                      |
-| **Compare**  | Temporary shortlist         | Auditions up to six candidates in order without creating or changing a permanent Collection.                 |
-| **Organize** | Collections and saved views | Groups assets manually or saves the current search, scope, filters, and sort as a dynamic Smart Collection.  |
-| **Classify** | Automatic asset detection   | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.             |
-| **Inspect**  | Media metadata              | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.       |
-| **Trim**     | Non-destructive In / Out    | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                    |
-| **Rotate**   | Quarter-turn video edits    | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                   |
-| **Listen**   | Waveform audition           | Scrubs sounds, sets non-destructive loops, and shares one persistent volume across every preview surface.    |
-| **Poster**   | Custom poster frames        | Uses the current video frame as a persistent card image without changing the source.                         |
-| **Language** | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                                |
-| **Deliver**  | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.              |
-| **Recover**  | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                         |
-| **Sync**     | Automatic pack watching     | Debounces external file changes and reconciles only affected paths while the app is running.                 |
+|                 | Feature                     | What it does                                                                                                 |
+| --------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Browse**      | Scrubbable asset grid       | Maps horizontal pointer position to a muted cached preview while keeping large libraries virtualized.        |
+| **Preview**     | Contextual playback         | Shows transitions between demo clips, overlays over a neutral scene, and sounds as waveforms.                |
+| **Find**        | Bilingual SFX search        | Expands reviewed German/English sound terms locally, offers exact-only mode, and reads available UCS fields. |
+| **Reuse**       | Recently and most used      | Records successful local drags so proven assets are easy to find again.                                      |
+| **Compare**     | Temporary shortlist         | Auditions up to six candidates in order without creating or changing a permanent Collection.                 |
+| **Deduplicate** | Exact-content review        | Finds byte-identical source files across packs and can hide redundant rows without touching media.           |
+| **Organize**    | Collections and saved views | Groups assets manually or saves the current search, scope, filters, and sort as a dynamic Smart Collection.  |
+| **Classify**    | Automatic asset detection   | Recognizes common transition, overlay, and sound naming patterns; every result remains editable.             |
+| **Inspect**     | Media metadata              | Reads duration, resolution, FPS, codecs, audio properties, and detectable alpha channels with FFprobe.       |
+| **Trim**        | Non-destructive In / Out    | Prepares a frame-accurate video range for drag-and-drop without changing the source file.                    |
+| **Rotate**      | Quarter-turn video edits    | Rotates clips left or right in 90° steps and prepares the result for native drag-and-drop.                   |
+| **Listen**      | Waveform audition           | Scrubs sounds, sets non-destructive loops, and shares one persistent volume across every preview surface.    |
+| **Poster**      | Custom poster frames        | Uses the current video frame as a persistent card image without changing the source.                         |
+| **Language**    | Deutsch / English           | Switches the complete interface instantly and remembers the local preference.                                |
+| **Deliver**     | Native multi-file drag      | Resolves and validates real local paths in Electron's main process before starting the OS drag.              |
+| **Recover**     | Missing-media relink        | Points a moved pack at a new root while preserving favorites, tags, and Collections.                         |
+| **Sync**        | Automatic pack watching     | Debounces external file changes and reconciles only affected paths while the app is running.                 |
 
 ## Workflow
 
@@ -63,6 +64,8 @@ Choose **Add Pack** and select a folder containing effects. The selected folder 
 ClipDock scans supported media, stores metadata first, and generates previews in the background. While ClipDock is running, linked pack folders are watched for debounced additions, changes, moves, and removals; manual rescan remains available as a recovery action. Search expands a small, versioned German/English SFX dictionary such as `whoosh`, `swoosh`, and `Wusch`; the visible **Exact** switch disables that expansion. Available UCS CatID, category, and subcategory metadata participates in search and filtering without renaming source files. Save a useful result view as a Smart Collection to re-run the same criteria against the current library.
 
 Use the card comparison action to place up to six temporary candidates in the session-only comparison tray. The tray auditions contextual video previews or original sound playback in insertion order, collapses over the grid without changing its size, and drags the active candidate through the normal validated drag path. Clear removes the entire temporary shortlist; Collections and source files are unaffected.
+
+The **Duplicates** view groups files only when their complete SHA-256 source hashes match. Hashing is streamed through one persistent background worker and resumes after restart. Every copy keeps its pack and full source path visible; hiding a redundant copy changes only its SQLite visibility flag and can be undone from the same view.
 
 ### 3. Drag into the edit
 
@@ -156,7 +159,7 @@ React renderer
           └─ validated native file drag
 ```
 
-The interface uses React and TanStack Virtual. Electron owns all privileged operations. SQLite stores packs, assets, Collections, Smart Collection criteria, tags, and persistent preview jobs. FFprobe analyzes media; FFmpeg creates silent H.264 context previews, WebP thumbnails, and sound waveforms.
+The interface uses React and TanStack Virtual. Electron owns all privileged operations. SQLite stores packs, assets, Collections, Smart Collection criteria, tags, and persistent preview and exact-hash jobs. FFprobe analyzes media; FFmpeg creates silent H.264 context previews, WebP thumbnails, and sound waveforms.
 
 The visual and interaction system is documented in [DESIGN.md](./DESIGN.md).
 
